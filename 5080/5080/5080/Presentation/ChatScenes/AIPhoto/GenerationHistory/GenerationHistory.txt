@@ -1,0 +1,257 @@
+////////////////////////////////////////////////////////////
+// FILE: GenerationHistoryListView.swift
+////////////////////////////////////////////////////////////
+
+
+
+
+import SwiftUI
+
+struct GenerationHistoryListView: View {
+
+    @StateObject private var vm: GenerationHistoryListViewModel
+
+    private let destinationBuilder: (GenerationKind, UUID) -> AnyView
+
+    init(
+        vm: GenerationHistoryListViewModel,
+        destinationBuilder: @escaping (GenerationKind, UUID) -> AnyView
+    ) {
+        _vm = StateObject(wrappedValue: vm)
+        self.destinationBuilder = destinationBuilder
+    }
+
+    var body: some View {
+        List {
+            if vm.isLoading {
+                HStack {
+                    ProgressView()
+                    Text("Загружаю историю…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let err = vm.errorText, !err.isEmpty {
+                Text(err)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+
+            if vm.visibleThreads.isEmpty, !vm.isLoading {
+                Text(vm.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                     ? "Пока нет тредов генераций. Сделай любую генерацию — и она появится тут."
+                     : "Ничего не найдено по запросу.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(vm.visibleThreads) { t in
+                NavigationLink {
+                    destinationBuilder(t.kind, t.id)
+                } label: {
+                    row(thread: t)
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        vm.deleteThread(t)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                    Button {
+                        vm.togglePin(t)
+                    } label: {
+                        Label(t.isPinned ? "Unpin" : "Pin", systemImage: t.isPinned ? "pin.slash" : "pin")
+                    }
+                    .tint(.orange)
+                }
+            }
+        }
+        .navigationTitle("История генераций")
+        .searchable(text: $vm.searchText, placement: .navigationBarDrawer(displayMode: .always))
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    vm.refresh()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+            }
+        }
+    }
+
+    private func row(thread: GenerationThread) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(thread.title)
+                    .font(.headline)
+                    .lineLimit(1)
+
+                if thread.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
+                Spacer(minLength: 0)
+
+                Text(Self.dateText(thread.lastActivityAt))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                Text(Self.kindText(thread.kind))
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.06))
+                    .clipShape(Capsule())
+
+                if let preview = thread.preview, !preview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(preview)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                } else {
+                    Text("—")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private static func kindText(_ kind: GenerationKind) -> String {
+        switch kind {
+        case .textToImage: return "Текст в картинку"
+        case .photoEdit: return "Редактировать фото"
+        case .photoEnhance: return "Улучшить фото"
+        case .textToVideo: return "Текст в видео"
+        case .photoToVideo: return "Фото в видео"
+        case .twoPhotosToVideo: return "Два фото в видео"
+        }
+    }
+
+    private static func dateText(_ date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: GenerationHistoryListViewModel.swift
+////////////////////////////////////////////////////////////
+
+
+import Foundation
+import Combine
+
+@MainActor
+final class GenerationHistoryListViewModel: ObservableObject {
+
+    // MARK: - UI
+
+    @Published var searchText: String = ""
+    @Published private(set) var threads: [GenerationThread] = []
+
+    @Published private(set) var isLoading: Bool = true
+    @Published private(set) var errorText: String?
+
+    // MARK: - Dependencies
+
+    private let repo: GenerationHistoryRepository
+    private let mediaCache: MediaCacheService
+
+    private var bag = Set<AnyCancellable>()
+
+    // MARK: - Init
+
+    init(repo: GenerationHistoryRepository, mediaCache: MediaCacheService) {
+        self.repo = repo
+        self.mediaCache = mediaCache
+        bind()
+    }
+
+    // MARK: - Public
+
+    var visibleThreads: [GenerationThread] {
+        let base = threads.sorted { $0.lastActivityAt > $1.lastActivityAt }
+
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return base }
+
+        return base.filter { t in
+            let title = t.title.lowercased()
+            let preview = (t.preview ?? "").lowercased()
+            let kind = t.kind.rawValue.lowercased()
+            return title.contains(q) || preview.contains(q) || kind.contains(q)
+        }
+    }
+
+    func refresh() {
+        isLoading = true
+        errorText = nil
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let threads = try await repo.fetchThreads()
+                self.threads = threads.sorted { $0.lastActivityAt > $1.lastActivityAt }
+                self.isLoading = false
+            } catch {
+                self.errorText = String(describing: error)
+                self.isLoading = false
+            }
+        }
+    }
+
+    func deleteThread(_ thread: GenerationThread) {
+        errorText = nil
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await mediaCache.deleteCache(threadId: thread.id)
+                try await repo.delete(threadId: thread.id)
+            } catch {
+                self.errorText = "Delete failed: \(String(describing: error))"
+            }
+        }
+    }
+
+    func togglePin(_ thread: GenerationThread) {
+        errorText = nil
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                var updated = thread
+                updated.isPinned.toggle()
+                try await repo.upsert(updated)
+            } catch {
+                self.errorText = "Pin failed: \(String(describing: error))"
+            }
+        }
+    }
+
+    // MARK: - Private
+
+    private func bind() {
+        repo.observeThreads()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] list in
+                guard let self else { return }
+                self.threads = list.sorted { $0.lastActivityAt > $1.lastActivityAt }
+                self.isLoading = false
+            }
+            .store(in: &bag)
+
+        refresh()
+    }
+}
+
+

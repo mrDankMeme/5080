@@ -1,0 +1,246 @@
+////////////////////////////////////////////////////////////
+// FILE: RequestCounterDebugView.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+
+public struct RequestCounterDebugView: View {
+
+    @StateObject private var vm: RequestCounterDebugViewModel
+
+    public init(vm: RequestCounterDebugViewModel) {
+        _vm = StateObject(wrappedValue: vm)
+    }
+
+    public var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 14) {
+
+                header
+
+                countersCard
+
+                reservationsCard
+
+                Spacer(minLength: 24)
+            }
+            .padding(16)
+        }
+        .navigationTitle("RequestCounter")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { vm.start() }
+        .onDisappear { vm.stop() }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Total")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            Text("\(vm.snapshot.total)")
+                .font(.system(size: 34, weight: .bold))
+                .monospacedDigit()
+
+            HStack(spacing: 10) {
+                Button("Refresh") {
+                    Task { await vm.refreshOnce() }
+                }
+                .buttonStyle(.bordered)
+
+                #if DEBUG
+                Button("Log state") {
+                    Task { await vm.debugLog(tag: "debug_screen") }
+                }
+                .buttonStyle(.bordered)
+                #endif
+
+                Spacer()
+
+                Text(vm.isRunning ? "polling" : "stopped")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(vm.isRunning ? .green : .secondary)
+            }
+        }
+    }
+
+    private var countersCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Counters")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            row("chat", vm.snapshot.chat)
+            row("image", vm.snapshot.image)
+            row("video", vm.snapshot.video)
+        }
+        .padding(12)
+        .background(Color.black.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func row(_ title: String, _ value: Int) -> some View {
+        HStack {
+            Text(title).font(.system(size: 15))
+            Spacer()
+            Text("\(value)")
+                .font(.system(size: 15, weight: .semibold))
+                .monospacedDigit()
+        }
+    }
+
+    private var reservationsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Active reservations")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            if vm.snapshot.reservations.isEmpty {
+                Text("Нет активных job’ов.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 6)
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(sorted(vm.snapshot.reservations)) { r in
+                        reservationRow(r)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.black.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func sorted(_ items: [RequestReservation]) -> [RequestReservation] {
+        items.sorted(by: { $0.createdAt > $1.createdAt })
+    }
+
+    private func reservationRow(_ r: RequestReservation) -> some View {
+        let age = max(0, Date().timeIntervalSince(r.createdAt))
+        let ageText = formatAge(age)
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(r.category.rawValue)
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.08))
+                    .clipShape(Capsule(style: .continuous))
+
+                Spacer()
+
+                Text(ageText)
+                    .font(.system(size: 12, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(r.id)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.75))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    private func formatAge(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded(.down))
+        let m = total / 60
+        let s = total % 60
+        return String(format: "%02d:%02d", m, s)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: RequestCounterDebugViewModel.swift
+////////////////////////////////////////////////////////////
+
+
+import Foundation
+
+@MainActor
+public final class RequestCounterDebugViewModel: ObservableObject {
+
+    @Published public private(set) var snapshot: RequestCounterSnapshot = .init()
+    @Published public private(set) var isRunning: Bool = false
+
+    private let counter: RequestCounterService
+    private var task: Task<Void, Never>?
+
+    public init(counter: RequestCounterService) {
+        self.counter = counter
+    }
+
+    deinit {
+        stop()
+    }
+
+    // MARK: - Public API (safe from any context)
+
+    public nonisolated func start(pollIntervalSeconds: TimeInterval = 0.6) {
+        Task { @MainActor [weak self] in
+            self?._startOnMainActor(pollIntervalSeconds: pollIntervalSeconds)
+        }
+    }
+
+    public nonisolated func stop() {
+        Task { @MainActor [weak self] in
+            self?._stopOnMainActor()
+        }
+    }
+
+    public func refreshOnce() async {
+        let snap = await counter.snapshot()
+        snapshot = snap
+    }
+
+    public func debugLog(tag: String) async {
+        await counter.debugLogCurrentState(tag: tag)
+    }
+
+    // MARK: - MainActor internals
+
+    private func _startOnMainActor(pollIntervalSeconds: TimeInterval) {
+        guard task == nil else { return }
+
+        isRunning = true
+
+        task = Task { [weak self] in
+            guard let self else { return }
+
+            await self.refreshOnce()
+
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(pollIntervalSeconds * 1_000_000_000))
+                await self.refreshOnce()
+            }
+        }
+    }
+
+    private func _stopOnMainActor() {
+        task?.cancel()
+        task = nil
+        isRunning = false
+    }
+}
+
+

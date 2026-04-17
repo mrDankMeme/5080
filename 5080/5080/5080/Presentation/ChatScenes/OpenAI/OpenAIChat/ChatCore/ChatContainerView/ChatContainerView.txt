@@ -1,0 +1,506 @@
+////////////////////////////////////////////////////////////
+// FILE: ActivityView.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+import UIKit
+
+struct ActivityView: UIViewControllerRepresentable {
+
+    let activityItems: [Any]
+    var applicationActivities: [UIActivity]? = nil
+    var excludedActivityTypes: [UIActivity.ActivityType]? = nil
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let vc = UIActivityViewController(activityItems: activityItems, applicationActivities: applicationActivities)
+        vc.excludedActivityTypes = excludedActivityTypes
+        return vc
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ChatBubble.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+
+// MARK: - Bubble row (avatar + message)
+
+struct ChatBubble: View {
+    let message: ChatMessage
+
+    private let avatarSize: CGFloat = 32.scale
+    private let bubbleCorner: CGFloat = 20.scale
+
+    private let systemHintMaxWidth: CGFloat = 320.scale
+    private let systemHintCorner: CGFloat = 16.scale
+
+    var body: some View {
+        switch message.role {
+        case .assistant:
+            HStack(alignment: .top, spacing: 10.scale) {
+                avatar(imageName: "Chat.robot")
+                bubble
+                Spacer(minLength: 40.scale)
+            }
+
+        case .user:
+            HStack(alignment: .top, spacing: 10.scale) {
+                Spacer(minLength: 40.scale)
+                bubble
+                avatar(imageName: "Chat.user")
+            }
+
+        case .system:
+            systemHintRow
+        }
+    }
+
+    // MARK: - Avatars
+
+    private func avatar(imageName: String) -> some View {
+        Image(imageName)
+            .resizable()
+            .scaledToFit()
+            .frame(width: avatarSize, height: avatarSize)
+    }
+
+    // MARK: - System hint (compact)
+
+    private var systemHintRow: some View {
+        HStack {
+            Spacer(minLength: 0)
+
+            systemHint
+                .frame(maxWidth: systemHintMaxWidth, alignment: .center)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 6.scale)
+    }
+
+    private var systemHint: some View {
+        Text(message.text)
+            .font(Tokens.Font.regular11)
+            .foregroundStyle(Tokens.Color.textSecondary)
+            .multilineTextAlignment(.leading)
+            .padding(.horizontal, 14.scale)
+            .padding(.vertical, 10.scale)
+            .background(
+                RoundedRectangle(cornerRadius: systemHintCorner, style: .continuous)
+                    .fill(Color.black.opacity(0.04))
+            )
+    }
+
+    // MARK: - Regular bubble (user/assistant)
+
+    private var bubble: some View {
+        VStack(alignment: .leading, spacing: 10.scale) {
+
+            if shouldShowInlineProcessing {
+                inlineProcessing
+            } else {
+
+                if !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(message.text)
+                        .font(.system(size: 16.scale, weight: .regular))
+                        .foregroundStyle(Tokens.Color.textPrimary)
+                }
+
+                if !message.attachments.isEmpty {
+                    VStack(alignment: .leading, spacing: 10.scale) {
+                        ForEach(message.attachments) { att in
+                            MessageAttachmentChip(
+                                kind: att.kind,
+                                title: att.filename,
+                                subtitle: formatBytes(att.sizeBytes)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 12.scale)
+        .padding(.horizontal, 14.scale)
+        .background(bubbleBackground)
+        .clipShape(RoundedRectangle(cornerRadius: bubbleCorner, style: .continuous))
+        .shadow(color: bubbleShadowColor, radius: bubbleShadowRadius, x: 0, y: bubbleShadowYOffset)
+    }
+
+    private var shouldShowInlineProcessing: Bool {
+        message.role == .assistant && message.text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("⏳")
+    }
+
+    private var inlineProcessing: some View {
+        HStack(spacing: 8.scale) {
+            ProgressView()
+            Text("Processing…")
+                .font(Tokens.Font.regular11)
+                .foregroundStyle(Tokens.Color.textSecondary)
+        }
+    }
+
+    private var bubbleBackground: Color {
+        switch message.role {
+        case .assistant:
+            return .white
+        case .user:
+            return TokensColor.userBubble
+        case .system:
+            return Color.black.opacity(0.03)
+        }
+    }
+
+    private var bubbleShadowColor: Color {
+        switch message.role {
+        case .assistant:
+            return Color.black.opacity(0.08)
+        case .user, .system:
+            return Color.clear
+        }
+    }
+
+    private var bubbleShadowRadius: CGFloat {
+        message.role == .assistant ? 10.scale : 0
+    }
+
+    private var bubbleShadowYOffset: CGFloat {
+        message.role == .assistant ? 4.scale : 0
+    }
+
+    // MARK: - Helpers
+
+    private func formatBytes(_ bytes: Int) -> String {
+        let kb = Double(bytes) / 1024.0
+        if kb < 1024.0 { return String(format: "%.0f KB", kb) }
+        let mb = kb / 1024.0
+        return String(format: "%.1f MB", mb)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ChatContainerView.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+
+struct ChatContainerView<Composer: View>: View {
+
+    let title: String
+    let messages: [ChatMessage]
+    let isLoading: Bool
+    let errorText: String?
+    let onTapMore: (() -> Void)?
+    let composer: Composer
+
+    @Environment(\.dismiss) private var dismiss
+
+    init(
+        title: String,
+        messages: [ChatMessage],
+        isLoading: Bool,
+        errorText: String?,
+        onTapMore: (() -> Void)? = nil,
+        @ViewBuilder composer: () -> Composer
+    ) {
+        self.title = title
+        self.messages = messages
+        self.isLoading = isLoading
+        self.errorText = errorText
+        self.onTapMore = onTapMore
+        self.composer = composer()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+
+            header
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12.scale) {
+
+                        ForEach(messages) { msg in
+                            ChatBubble(message: msg)
+                                .id(msg.id)
+                        }
+
+                        if let errorText, !errorText.isEmpty {
+                            Text(errorText)
+                                .foregroundStyle(.red)
+                                .font(.footnote)
+                                .padding(.top, 8.scale)
+                        }
+                    }
+                    .padding(.horizontal, 16.scale)
+                    .padding(.vertical, 16.scale)
+                }
+                .onChange(of: messages.count) { _ in
+                    guard let last = messages.last else { return }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+            }
+
+            composer
+                .padding(.bottom, 8.scale)
+                .background(TokensColor.chatBackground)
+        }
+        .background(TokensColor.chatBackground.ignoresSafeArea())
+        .navigationBarHidden(true)
+    }
+
+    // MARK: - Header (custom, from assets)
+
+    private var header: some View {
+        ZStack {
+            Text(title)
+                .font(Tokens.Font.medium17)
+                .foregroundStyle(Tokens.Color.textPrimary)
+
+            HStack {
+                Button { dismiss() } label: {
+                    Image("ic_nav_back_40")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 40.scale, height: 40.scale)
+                }
+
+                Spacer()
+
+                Button {
+                    onTapMore?()
+                } label: {
+                    Image("ic_nav_more_40")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 40.scale, height: 40.scale)
+                }
+            }
+            .padding(.horizontal, 12.scale)
+        }
+        .frame(height: 56.scale)
+        .padding(.top, 6.scale)
+        .background(TokensColor.chatBackground)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ChatOptionsSheet.swift
+////////////////////////////////////////////////////////////
+
+// ===== FILE: ./Claude/Presentation/Chat/ChatOptionsSheet.swift =====
+
+import SwiftUI
+
+struct ChatOptionsSheet: View {
+
+    let onCopyAll: () -> Void
+    let onShare: () -> Void
+    let onExport: () -> Void
+    let onDelete: () -> Void
+    let onClose: () -> Void
+
+    // MARK: - Design (по макету)
+
+    private let headerHeight: CGFloat = 20.scale
+    private let headerHorizontalInset: CGFloat = 24.scale
+
+    private let closeSize: CGFloat = 40.scale
+
+    private let dividerOpacity: CGFloat = 0.2
+
+    private let buttonsHorizontalInset: CGFloat = 16.scale
+    private let firstButtonTopInset: CGFloat = 20.scale
+    private let buttonsVSpacing: CGFloat = 12.scale
+
+    private let buttonHeight: CGFloat = 57.scale
+    private let buttonCornerRadius: CGFloat = 16.scale
+
+    private let iconSize: CGFloat = 20.scale
+    private let iconLeadingInset: CGFloat = 16.scale
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            divider
+
+            VStack(spacing: buttonsVSpacing) {
+                optionButton(
+                    title: "Копировать весь чат",
+                    assetName: "ChatOptions.Copy",
+                    role: nil,
+                    action: onCopyAll
+                )
+
+                optionButton(
+                    title: "Поделиться",
+                    assetName: "ChatOptions.Share",
+                    role: nil,
+                    action: onShare
+                )
+
+                optionButton(
+                    title: "Экспортировать",
+                    assetName: "ChatOptions.Export",
+                    role: nil,
+                    action: onExport
+                )
+
+                optionButton(
+                    title: "Удалить чат",
+                    assetName: "ChatOptions.Delete",
+                    role: .destructive,
+                    action: onDelete
+                )
+            }
+            .padding(.top, firstButtonTopInset)
+            .padding(.horizontal, buttonsHorizontalInset)
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    
+    private var header: some View {
+        HStack(spacing: 0) {
+            Text("Параметры чата")
+                .font(Tokens.Font.regular16)
+                .foregroundStyle(Color.black)
+
+            Spacer(minLength: 0)
+
+            Button(action: onClose) {
+                Image("ChatOptions.Close")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: closeSize, height: closeSize)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.top, -40.scale)
+        .padding(.horizontal, headerHorizontalInset)
+        .frame(height: headerHeight)
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(Color.black.opacity(dividerOpacity))
+            .frame(height: onePixel)
+            .frame(maxWidth: .infinity)
+    }
+
+    private var onePixel: CGFloat {
+        1.0 / UIScreen.main.scale
+    }
+
+    private func optionButton(
+        title: String,
+        assetName: String,
+        role: ButtonRole?,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            HStack(spacing: 12.scale) {
+                Image(assetName)
+                    .resizable()
+                    .renderingMode(.template)
+                    .scaledToFit()
+                    .frame(width: iconSize, height: iconSize)
+                    .foregroundStyle(.white)
+                    .padding(.leading, iconLeadingInset)
+
+                Text(title)
+                    .font(Tokens.Font.regular17)
+                    .foregroundStyle(.white)
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: buttonHeight)
+            .background(
+                RoundedRectangle(cornerRadius: buttonCornerRadius, style: .continuous)
+                    .fill(Tokens.Color.accent)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: MessageAttachmentChip.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+
+// MARK: - Attachment chip inside message bubble
+
+ struct MessageAttachmentChip: View {
+    let kind: ChatMessage.AttachmentKind
+    let title: String
+    let subtitle: String
+
+    private var iconName: String {
+        switch kind {
+        case .image: return "photo"
+        case .file:  return "doc"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 10.scale) {
+            Image(systemName: iconName)
+                .font(.system(size: 16.scale, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 2.scale) {
+                Text(title)
+                    .font(.system(size: 13.scale, weight: .semibold))
+                    .foregroundStyle(Tokens.Color.textPrimary)
+                    .lineLimit(1)
+
+                Text(subtitle)
+                    .font(.system(size: 11.scale, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 10.scale)
+        .padding(.horizontal, 12.scale)
+        .background(Color.black.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 16.scale, style: .continuous))
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: TokensColor.swift
+////////////////////////////////////////////////////////////
+
+
+
+
+import SwiftUI
+
+// MARK: - Local colors for chat design
+
+enum TokensColor {
+    static let chatBackground = Color(red: 250/255, green: 250/255, blue: 246/255)
+
+    static let userBubble = Color(red: 242/255, green: 242/255, blue: 242/255)
+}
+
+

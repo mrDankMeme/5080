@@ -1,0 +1,727 @@
+////////////////////////////////////////////////////////////
+// FILE: GenerationChatContainerView.swift
+////////////////////////////////////////////////////////////
+
+// ===== FILE: ./Claude/Presentation/Generation/GenerationChatContainerView.swift =====
+
+import SwiftUI
+import UIKit
+import Swinject
+
+struct GenerationChatContainerView<Composer: View>: View {
+
+    // MARK: - UI (Header / Capsule)
+
+    let headerTitle: String = "Чат"
+
+    let modeTitle: String
+
+    let modeTrailingActionTitle: String?
+    let onModeTrailingActionTap: (() -> Void)?
+
+    // MARK: - Existing
+
+    let title: String
+    let messages: [GenerationMessage]
+    let isLoading: Bool
+    let errorText: String?
+    let composer: Composer
+
+    let threadId: UUID?
+    let historyRepo: GenerationHistoryRepository?
+    let mediaCache: MediaCacheService?
+    let onMessageUpdated: ((GenerationMessage) -> Void)?
+
+    @State var viewerItem: MediaViewerItem?
+
+    @Environment(\.dismiss) var dismiss
+    @Environment(\.resolver) private var resolver
+
+    @State var sharePayload: SharePayload?
+    @State var isDeleting: Bool = false
+    @State var isExporting: Bool = false
+    @State var actionErrorText: String?
+
+    // ✅ чистим и папку, и zip
+    @State var exportedTempDirectoryURL: URL?
+    @State var exportedTempZipURL: URL?
+
+    @State var isOptionsPresented: Bool = false
+
+    init(
+        title: String,
+        modeTitle: String,
+        modeTrailingActionTitle: String? = nil,
+        onModeTrailingActionTap: (() -> Void)? = nil,
+        messages: [GenerationMessage],
+        isLoading: Bool,
+        errorText: String?,
+        threadId: UUID? = nil,
+        historyRepo: GenerationHistoryRepository? = nil,
+        mediaCache: MediaCacheService? = nil,
+        onMessageUpdated: ((GenerationMessage) -> Void)? = nil,
+        @ViewBuilder composer: () -> Composer
+    ) {
+        self.title = title
+        self.modeTitle = modeTitle
+        self.modeTrailingActionTitle = modeTrailingActionTitle
+        self.onModeTrailingActionTap = onModeTrailingActionTap
+        self.messages = messages
+        self.isLoading = isLoading
+        self.errorText = errorText
+        self.threadId = threadId
+        self.historyRepo = historyRepo
+        self.mediaCache = mediaCache
+        self.onMessageUpdated = onMessageUpdated
+        self.composer = composer()
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+
+                    modeCapsule
+                        .padding(.top, 16.scale)
+
+                    LazyVStack(alignment: .leading, spacing: 10) {
+
+                        ForEach(messages) { msg in
+                            GenerationBubbleView(
+                                message: msg,
+                                onOpenMedia: { item, _ in
+                                    viewerItem = item
+                                }
+                            )
+                            .id(msg.id)
+                        }
+
+                        if let errorText, !errorText.isEmpty {
+                            Text(errorText)
+                                .foregroundStyle(.red)
+                                .font(.footnote)
+                                .padding(.top, 8)
+                        }
+
+                        if let actionErrorText, !actionErrorText.isEmpty {
+                            Text(actionErrorText)
+                                .foregroundStyle(.red)
+                                .font(.footnote)
+                                .padding(.top, 8)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 16)
+                }
+            }
+            .onChange(of: messages.count) { _ in
+                guard let last = messages.last else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(last.id, anchor: .bottom)
+                }
+            }
+        }
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .navigationBar)
+
+        .safeAreaInset(edge: .top) {
+            headerView
+        }
+
+        .safeAreaInset(edge: .bottom) {
+            composer
+                .padding(.horizontal, 16.scale)
+                .padding(.top, 10.scale)
+                .padding(.bottom, 12.scale)
+                .background(Color(.systemBackground))
+        }
+
+        .fullScreenCover(item: $viewerItem) { item in
+            GenerationMediaViewer(
+                item: item,
+                recovery: makeRecoveryContextIfPossible(for: item)
+            )
+        }
+        .sheet(item: $sharePayload, onDismiss: cleanupExportTempIfNeeded) { payload in
+            ActivityViewController(activityItems: payload.items)
+        }
+
+        .overlay {
+            if isOptionsPresented {
+                GenerationChatOptionsOverlay(
+                    isPresented: $isOptionsPresented,
+                    isExportDisabled: (isExporting || threadId == nil || mediaCache == nil),
+                    isDeleteDisabled: (isDeleting || historyRepo == nil || threadId == nil),
+                    onCopyAll: { copyChatToPasteboard() },
+                    onShare: { shareChatAsDocument() },   // ✅ share == zip-export
+                    onExport: { exportChat() },           // ✅ export == zip-export
+                    onDelete: { deleteChat() }
+                )
+                .zIndex(999)
+                .transition(.opacity)
+            }
+        }
+
+        .task(id: threadId?.uuidString ?? "nil-thread") {
+            await markNotificationsReadForCurrentThreadIfNeeded()
+        }
+    }
+
+    // MARK: - Internal notifications (mark read)
+
+    @MainActor
+    private func markNotificationsReadForCurrentThreadIfNeeded() async {
+        guard let threadId else { return }
+
+        guard let center = resolver.resolve(InternalNotificationCenter.self) else {
+            #if DEBUG
+            print("🔔 GEN_CHAT: InternalNotificationCenter not resolved (markRead skipped)")
+            #endif
+            return
+        }
+
+        let all = await center.list()
+
+        let unreadForThisThread = all.filter { n in
+            n.isRead == false && n.payload.threadId == threadId
+        }
+
+        guard unreadForThisThread.isEmpty == false else { return }
+
+        for n in unreadForThisThread {
+            await center.markRead(id: n.id)
+        }
+
+        #if DEBUG
+        print("🔔 GEN_CHAT: markRead threadId=\(threadId) count=\(unreadForThisThread.count)")
+        #endif
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: GenerationChatContainerView+Actions.swift
+////////////////////////////////////////////////////////////
+
+// ===== FILE: ./Claude/Presentation/Generation/GenerationChatContainerView+Actions.swift =====
+
+import SwiftUI
+import UIKit
+import Foundation
+import ZIPFoundation
+
+extension GenerationChatContainerView {
+
+    // MARK: - Actions
+
+    func copyChatToPasteboard() {
+        let text = GenerationChatExportService.makeShareText(title: title, messages: messages)
+        UIPasteboard.general.string = text
+    }
+
+    /// ✅ Share теперь делает то же, что Export: собираем директорию -> ZIP -> системный Share
+    func shareChatAsDocument() {
+        exportChat()
+    }
+
+    /// Можно оставить для истории/отладки. Сейчас не используем.
+    func shareChatText() {
+        sharePayload = SharePayload(items: [
+            GenerationChatExportService.makeShareText(title: title, messages: messages)
+        ])
+    }
+
+    /// ✅ Экспорт: папка -> zip -> UIActivityViewController (шарим zip)
+    func exportChat() {
+        guard let threadId, let mediaCache else { return }
+        actionErrorText = nil
+
+        // защита от двойного запуска
+        guard isExporting == false else { return }
+
+        isExporting = true
+
+        Task { @MainActor in
+            defer { isExporting = false }
+
+            do {
+                // 1) собрать директорию экспорта (как раньше)
+                let result = try await GenerationChatExportService.exportDirectory(
+                    title: title,
+                    threadId: threadId,
+                    messages: messages,
+                    mediaCache: mediaCache
+                )
+
+                let directoryURL = result.directoryURL
+                exportedTempDirectoryURL = directoryURL
+
+                // 2) zip (через ZIPFoundation)
+                let zipURL = try makeZip(from: directoryURL, title: title)
+                exportedTempZipURL = zipURL
+
+                // 3) шарим ZIP (а не папку)
+                sharePayload = SharePayload(items: [zipURL])
+
+            } catch {
+                actionErrorText = "Export failed: \(String(describing: error))"
+            }
+        }
+    }
+
+    func cleanupExportTempIfNeeded() {
+        if let zipURL = exportedTempZipURL {
+            exportedTempZipURL = nil
+            try? FileManager.default.removeItem(at: zipURL)
+        }
+
+        if let dirURL = exportedTempDirectoryURL {
+            exportedTempDirectoryURL = nil
+            try? FileManager.default.removeItem(at: dirURL)
+        }
+    }
+
+    func deleteChat() {
+        guard let historyRepo, let threadId else { return }
+        actionErrorText = nil
+        isDeleting = true
+
+        Task { @MainActor in
+            defer { isDeleting = false }
+            do {
+                try await historyRepo.delete(threadId: threadId)
+                dismiss()
+            } catch {
+                actionErrorText = "Delete failed: \(String(describing: error))"
+            }
+        }
+    }
+}
+
+// MARK: - ZIP helper (ZIPFoundation)
+
+private extension GenerationChatContainerView {
+
+    func makeZip(from directoryURL: URL, title: String) throws -> URL {
+        let safeTitle = title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+
+        let fileName = (safeTitle.isEmpty ? "chat_export" : safeTitle) + ".zip"
+        let zipURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+
+        // если уже есть — удаляем
+        try? FileManager.default.removeItem(at: zipURL)
+
+        // ZIPFoundation extension
+        try FileManager.default.zipItem(at: directoryURL, to: zipURL, shouldKeepParent: true)
+
+        return zipURL
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: GenerationChatContainerView+HeaderAndCapsule.swift
+////////////////////////////////////////////////////////////
+
+// ===== FILE: ./Claude/Presentation/Generation/GenerationChatContainerView+HeaderAndCapsule.swift =====
+
+import SwiftUI
+import UIKit
+
+extension GenerationChatContainerView {
+
+    // MARK: - Header (Figma)
+
+    var headerView: some View {
+        ZStack {
+            HStack {
+                backButton
+                Spacer(minLength: 0)
+                moreButton
+            }
+
+            Text(headerTitle)
+                .font(Tokens.Font.medium17)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 16.scale)
+        .padding(.top, 8.scale)
+        .padding(.bottom, 10.scale)
+        .background(Color(.systemBackground))
+    }
+
+    fileprivate var backButton: some View {
+        Button {
+            dismiss()
+        } label: {
+            Image("ic_nav_back_40")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 40.scale, height: 40.scale)
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+    }
+
+    // ✅ вместо Menu — просто открываем наш кастомный sheet
+    fileprivate var moreButton: some View {
+        Button {
+            isOptionsPresented = true
+        } label: {
+            if isExporting || isDeleting {
+                ProgressView()
+                    .frame(width: 40.scale, height: 40.scale)
+            } else {
+                Image("ic_nav_more_40")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 40.scale, height: 40.scale)
+            }
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .disabled(isExporting || isDeleting)
+    }
+
+    // MARK: - Mode capsule (design)
+
+    var modeCapsule: some View {
+        let strokeColor = Color(hex: "F2F2F2") ?? Color(.sRGB, white: 0.95, opacity: 1)
+
+        return HStack(spacing: 10.scale) {
+
+            Text(modeTitle)
+                .font(Tokens.Font.regular16)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            if let title = modeTrailingActionTitle, let onTap = onModeTrailingActionTap {
+                Button(action: onTap) {
+                    Text(title)
+                        .font(Tokens.Font.regular16)
+                        .foregroundStyle(Tokens.Color.accent)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 24.scale)
+        .frame(height: 48.scale)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.white)
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(strokeColor, lineWidth: 3.scale)
+        )
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.horizontal, 16.scale)
+        .background(Color(.systemBackground))
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: GenerationChatContainerView+Support.swift
+////////////////////////////////////////////////////////////
+
+
+
+import SwiftUI
+import UIKit
+
+extension GenerationChatContainerView {
+
+    // MARK: - Support types
+
+     struct SharePayload: Identifiable {
+        let id = UUID()
+        let items: [Any]
+    }
+
+     struct ActivityViewController: UIViewControllerRepresentable {
+        let activityItems: [Any]
+
+        func makeUIViewController(context: Context) -> UIActivityViewController {
+            UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        }
+
+        func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+    }
+
+    // MARK: - Recovery
+
+    func makeRecoveryContextIfPossible(for item: MediaViewerItem) -> MediaCacheRecoveryContext? {
+
+        if item.remoteURL.isFileURL {
+            return nil
+        }
+
+        guard
+            let threadId,
+            let historyRepo,
+            let mediaCache,
+            let onMessageUpdated
+        else { return nil }
+
+        guard let message = messages.first(where: { $0.id == item.id }) else {
+            #if DEBUG
+            print("🚨 RECOVERY_CTX: message not found in current messages array. itemId=\(item.id)")
+            #endif
+            return nil
+        }
+
+        let kind: String = (item.kind == .image) ? "image" : "video"
+
+        return MediaCacheRecoveryContext(
+            threadId: threadId,
+            message: message,
+            kind: kind,
+            historyRepo: historyRepo,
+            mediaCache: mediaCache,
+            onMessageUpdated: { updated in
+                onMessageUpdated(updated)
+            }
+        )
+    }
+
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: GenerationChatOptionsOverlay.swift
+////////////////////////////////////////////////////////////
+
+//
+//  GenerationChatOptionsOverlay.swift
+//  Claude
+//
+//  Created by Niiaz Khasanov on 1/28/26.
+//
+
+
+import SwiftUI
+
+struct GenerationChatOptionsOverlay: View {
+
+    @Binding var isPresented: Bool
+
+    let isExportDisabled: Bool
+    let isDeleteDisabled: Bool
+
+    let onCopyAll: () -> Void
+    let onShare: () -> Void
+    let onExport: () -> Void
+    let onDelete: () -> Void
+
+    @State private var appear: Bool = false
+
+    private let cornerRadius: CGFloat = 24.scale
+    private let sheetHeight: CGFloat = 415.scale
+
+    var body: some View {
+        ZStack {
+            Color.black
+                .opacity(appear ? 0.35 : 0.0)
+                .ignoresSafeArea()
+                .onTapGesture { close() }
+                .animation(.easeOut(duration: 0.18), value: appear)
+
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+
+                GenerationChatOptionsSheet(
+                    onCopyAll: { onCopyAll(); close() },
+                    onShare: { onShare(); close() },
+                    onExport: {
+                        guard !isExportDisabled else { return }
+                        onExport()
+                        close()
+                    },
+                    onDelete: {
+                        guard !isDeleteDisabled else { return }
+                        onDelete()
+                        close()
+                    },
+                    onClose: { close() }
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: sheetHeight)
+                .background(
+                    Tokens.Color.chatOptionsSheetBackground
+                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                )
+                .offset(y: appear ? 0 : (sheetHeight + 40.scale))
+                .animation(.spring(response: 0.30, dampingFraction: 0.92), value: appear)
+            }
+            .ignoresSafeArea(edges: .bottom)
+        }
+        .onAppear { appear = true }
+    }
+
+    private func close() {
+        appear = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+            isPresented = false
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: GenerationChatOptionsSheet.swift
+////////////////////////////////////////////////////////////
+
+//
+//  GenerationChatOptionsSheet.swift
+//  Claude
+//
+//  Created by Niiaz Khasanov on 1/28/26.
+//
+
+
+// ===== FILE: ./Claude/Presentation/Generation/GenerationChatOptionsSheet.swift =====
+
+import SwiftUI
+
+struct GenerationChatOptionsSheet: View {
+
+    let onCopyAll: () -> Void
+    let onShare: () -> Void
+    let onExport: () -> Void
+    let onDelete: () -> Void
+    let onClose: () -> Void
+
+    // MARK: - Design (как в ChatOptionsSheet — текущая “рабочая” версия)
+
+    private let headerHeight: CGFloat = 20.scale
+    private let headerHorizontalInset: CGFloat = 24.scale
+
+    private let closeSize: CGFloat = 40.scale
+
+    private let dividerOpacity: CGFloat = 0.2
+
+    private let buttonsHorizontalInset: CGFloat = 16.scale
+    private let firstButtonTopInset: CGFloat = 20.scale
+    private let buttonsVSpacing: CGFloat = 12.scale
+
+    private let buttonHeight: CGFloat = 57.scale
+    private let buttonCornerRadius: CGFloat = 16.scale
+
+    private let iconSize: CGFloat = 20.scale
+    private let iconLeadingInset: CGFloat = 16.scale
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            divider
+
+            VStack(spacing: buttonsVSpacing) {
+
+                optionButton(
+                    title: "Копировать весь чат",
+                    assetName: "ChatOptions.Copy",
+                    role: nil,
+                    action: onCopyAll
+                )
+
+                optionButton(
+                    title: "Поделиться",
+                    assetName: "ChatOptions.Share",
+                    role: nil,
+                    action: onShare
+                )
+
+                optionButton(
+                    title: "Экспортировать",
+                    assetName: "ChatOptions.Export",
+                    role: nil,
+                    action: onExport
+                )
+
+                optionButton(
+                    title: "Удалить чат",
+                    assetName: "ChatOptions.Delete",
+                    role: .destructive,
+                    action: onDelete
+                )
+            }
+            .padding(.top, firstButtonTopInset)
+            .padding(.horizontal, buttonsHorizontalInset)
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    private var header: some View {
+        HStack(spacing: 0) {
+            Text("Параметры чата")
+                .font(Tokens.Font.regular16)
+                .foregroundStyle(Color.black)
+
+            Spacer(minLength: 0)
+
+            Button(action: onClose) {
+                Image("ChatOptions.Close")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: closeSize, height: closeSize)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.top, -40.scale)
+        .padding(.horizontal, headerHorizontalInset)
+        .frame(height: headerHeight)
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(Color.black.opacity(dividerOpacity))
+            .frame(height: onePixel)
+            .frame(maxWidth: .infinity)
+    }
+
+    private var onePixel: CGFloat {
+        1.0 / UIScreen.main.scale
+    }
+
+    private func optionButton(
+        title: String,
+        assetName: String,
+        role: ButtonRole?,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            HStack(spacing: 12.scale) {
+                Image(assetName)
+                    .resizable()
+                    .renderingMode(.template)
+                    .scaledToFit()
+                    .frame(width: iconSize, height: iconSize)
+                    .foregroundStyle(.white)
+                    .padding(.leading, iconLeadingInset)
+
+                Text(title)
+                    .font(Tokens.Font.regular17)
+                    .foregroundStyle(.white)
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: buttonHeight)
+            .background(
+                RoundedRectangle(cornerRadius: buttonCornerRadius, style: .continuous)
+                    .fill(Tokens.Color.accent)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+

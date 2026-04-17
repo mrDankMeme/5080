@@ -1,0 +1,883 @@
+////////////////////////////////////////////////////////////
+// FILE: ApphudProduct+PaywallSorting.swift
+////////////////////////////////////////////////////////////
+
+//
+//  ApphudProduct+PaywallSorting.swift
+//  Claude
+//
+//  Created by Niiaz Khasanov on 1/30/26.
+//
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/ApphudProduct+PaywallSorting.swift
+////////////////////////////////////////////////////////////
+
+import ApphudSDK
+import Foundation
+
+extension Array where Element == ApphudProduct {
+
+    func paywallSortedProducts() -> [ApphudProduct] {
+        // Порядок: weekly сверху, yearly снизу.
+        self.sorted { lhs, rhs in
+            let lt = lhs.timeString.lowercased()
+            let rt = rhs.timeString.lowercased()
+
+            if lt.contains("week"), rt.contains("year") { return true }
+            if lt.contains("year"), rt.contains("week") { return false }
+
+            return lhs.price < rhs.price
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PaywallAssets.swift
+////////////////////////////////////////////////////////////
+
+//
+//  PaywallAssets.swift
+//  Claude
+//
+//  Created by Niiaz Khasanov on 1/30/26.
+//
+
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/PaywallAssets.swift
+////////////////////////////////////////////////////////////
+
+import Foundation
+
+enum PaywallAssets {
+
+    static let xmark = "Paywall.xmark"
+
+    static let bgEn = "Paywall.FullBackgroundEn"
+    static let bgRu = "Paywall.FullBackgroundRu"
+
+    static let planWeekEn = "Paywall.weekEn"
+    static let planYearEn = "Paywall.yearlyEn"
+
+    static let planWeekRu = "Paywall.weekRu"
+    static let planYearRu = "Paywall.yearlyRu"
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PaywallBackgroundView.swift
+////////////////////////////////////////////////////////////
+
+//
+//  PaywallBackgroundView.swift
+//  Claude
+//
+//  Created by Niiaz Khasanov on 1/30/26.
+//
+
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/PaywallBackgroundView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct PaywallBackgroundView: View {
+
+    let isEnglishUI: Bool
+
+    var body: some View {
+        ZStack {
+            Color.black
+
+            Image(isEnglishUI ? PaywallAssets.bgEn : PaywallAssets.bgRu)
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity)
+                .clipped()
+
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.0),
+                    Color.black.opacity(0.10),
+                    Color.black.opacity(0.20)
+                ],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PaywallBottomCardView.swift
+////////////////////////////////////////////////////////////
+
+//
+//  PaywallBottomCardView.swift
+//  Claude
+//
+//  Created by Niiaz Khasanov on 1/30/26.
+//
+
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/PaywallBottomCardView.swift
+////////////////////////////////////////////////////////////
+
+import ApphudSDK
+import SwiftUI
+
+struct PaywallBottomCardView: View {
+
+    let titleText: String
+    let cancelText: String
+    let continueText: String
+
+    let footerTerms: String
+    let footerRestore: String
+    let footerPrivacy: String
+
+    let termsURL: URL?
+    let privacyURL: URL?
+    let openURL: OpenURLAction
+
+    let products: [ApphudProduct]
+    let sortedProductsForUI: [ApphudProduct]
+
+    let purchaseState: PurchaseManager.PurchaseState
+    let isReady: Bool
+    let isLoading: Bool
+
+    @Binding var pickedProd: ApphudProduct?
+
+    let onPick: (ApphudProduct) -> Void
+    let onRestore: () -> Void
+    let onContinue: (ApphudProduct) -> Void
+
+    let planTitle: (ApphudProduct) -> String
+    let planSubtitle: (ApphudProduct) -> String
+    let planPriceText: (ApphudProduct) -> String
+
+    var body: some View {
+        VStack(spacing: 14.scale) {
+            Text(titleText)
+                .font(.system(size: 28.scale, weight: .bold))
+                .foregroundStyle(Color.black)
+                .padding(.top, 18.scale)
+
+            PaywallPlanOptionsView(
+                purchaseState: purchaseState,
+                products: products,
+                sortedProductsForUI: sortedProductsForUI,
+                pickedProd: $pickedProd,
+                isLoading: isLoading,
+                onPick: onPick,
+                planTitle: planTitle,
+                planSubtitle: planSubtitle,
+                planPriceText: planPriceText
+            )
+
+            Text(cancelText)
+                .font(.system(size: 16.scale, weight: .regular))
+                .foregroundStyle(Color.gray.opacity(0.8))
+                .padding(.top, 2.scale)
+
+            PaywallContinueButton(
+                title: continueText,
+                isEnabled: pickedProd != nil && isReady && !isLoading,
+                onTap: {
+                    guard let pickedProd else { return }
+                    onContinue(pickedProd)
+                }
+            )
+            .padding(.top, 4.scale)
+
+            PaywallFooterLinksView(
+                termsTitle: footerTerms,
+                restoreTitle: footerRestore,
+                privacyTitle: footerPrivacy,
+                termsURL: termsURL,
+                privacyURL: privacyURL,
+                openURL: openURL,
+                onRestore: onRestore
+            )
+            .padding(.bottom, 14.scale)
+        }
+        .padding(.horizontal, PaywallLayout.horizontalPadding)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: PaywallLayout.bottomCardCorner, style: .continuous)
+                .fill(Color.white)
+                .ignoresSafeArea(edges: .bottom)
+        )
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PaywallCloseButton.swift
+////////////////////////////////////////////////////////////
+
+//
+//  PaywallCloseButton.swift
+//  Claude
+//
+//  Created by Niiaz Khasanov on 1/30/26.
+//
+
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/PaywallCloseButton.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct PaywallCloseButton: View {
+
+    let isDisabled: Bool
+    let isHidden: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button {
+            onTap()
+        } label: {
+            Image(PaywallAssets.xmark)
+                .resizable()
+                .renderingMode(.original)
+                .frame(width: PaywallLayout.closeSize, height: PaywallLayout.closeSize)
+                .contentShape(Rectangle())
+        }
+        .padding(.top, 18.scale)
+        .padding(.trailing, 18.scale)
+        .disabled(isDisabled)
+        .opacity(isHidden ? 0.0 : 1.0)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PaywallContinueButton.swift
+////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/PaywallContinueButton.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct PaywallContinueButton: View {
+
+    let title: String
+    let isEnabled: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button {
+            onTap()
+        } label: {
+            Text(title)
+                .font(Tokens.Font.semibold17)
+                .foregroundStyle(Tokens.Color.backgroundMain)
+                .frame(maxWidth: .infinity)
+                .frame(height: 56.scale)
+                .background(
+                    RoundedRectangle(
+                        cornerRadius: Tokens.Radius.medium,
+                        style: .continuous
+                    )
+                    .fill(Tokens.Color.accent)
+                )
+        }
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1.0 : 0.55)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PaywallFooterLinksView.swift
+////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/PaywallFooterLinksView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct PaywallFooterLinksView: View {
+
+    let termsTitle: String
+    let restoreTitle: String
+    let privacyTitle: String
+
+    let termsURL: URL?
+    let privacyURL: URL?
+    let openURL: OpenURLAction
+
+    let onRestore: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8.scale) {
+            Button(termsTitle) {
+                if let termsURL { openURL(termsURL) }
+            }
+            .disabled(termsURL == nil)
+
+            Text("•")
+                .foregroundStyle(Tokens.Color.textThirdcondary.opacity(0.6))
+
+            Button(restoreTitle) {
+                onRestore()
+            }
+
+            Text("•")
+                .foregroundStyle(Tokens.Color.textThirdcondary.opacity(0.6))
+
+            Button(privacyTitle) {
+                if let privacyURL { openURL(privacyURL) }
+            }
+            .disabled(privacyURL == nil)
+        }
+        .font(Tokens.Font.regular14)
+        .foregroundStyle(Tokens.Color.textSecondary)
+        .padding(.top, 6.scale)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PaywallLayout.swift
+////////////////////////////////////////////////////////////
+
+//
+//  PaywallLayout.swift
+//  Claude
+//
+//  Created by Niiaz Khasanov on 1/30/26.
+//
+
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/PaywallLayout.swift
+////////////////////////////////////////////////////////////
+
+import Foundation
+import SwiftUI
+
+enum PaywallLayout {
+
+    static let topImageSize = CGSize(width: 303.scale, height: 178.scale)
+    static let closeSize: CGFloat = 36.scale
+
+    static let bottomCardCorner: CGFloat = 26.scale
+    static let optionCorner: CGFloat = 18.scale
+    static let optionHeight: CGFloat = 64.scale
+
+    static let horizontalPadding: CGFloat = 16.scale
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PaywallLoadingOverlayView.swift
+////////////////////////////////////////////////////////////
+
+//
+//  PaywallLoadingOverlayView.swift
+//  Claude
+//
+//  Created by Niiaz Khasanov on 1/30/26.
+//
+
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/PaywallLoadingOverlayView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct PaywallLoadingOverlayView: View {
+
+    var body: some View {
+        ProgressView()
+            .tint(Color.white)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black.opacity(0.25))
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PaywallPlanOptionsView.swift
+////////////////////////////////////////////////////////////
+
+//
+//  PaywallPlanOptionsView.swift
+//  Claude
+//
+//  Created by Niiaz Khasanov on 1/30/26.
+//
+
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/PaywallPlanOptionsView.swift
+////////////////////////////////////////////////////////////
+
+import ApphudSDK
+import SwiftUI
+
+struct PaywallPlanOptionsView: View {
+
+    let purchaseState: PurchaseManager.PurchaseState
+    let products: [ApphudProduct]
+    let sortedProductsForUI: [ApphudProduct]
+
+    @Binding var pickedProd: ApphudProduct?
+
+    let isLoading: Bool
+    let onPick: (ApphudProduct) -> Void
+
+    let planTitle: (ApphudProduct) -> String
+    let planSubtitle: (ApphudProduct) -> String
+    let planPriceText: (ApphudProduct) -> String
+
+    var body: some View {
+        VStack(spacing: 12.scale) {
+            if purchaseState == .loading || products.isEmpty {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(Color.gray)
+                    .scaleEffect(1.2)
+                    .padding(.vertical, 24.scale)
+            } else {
+                ForEach(sortedProductsForUI, id: \.productId) { product in
+                    Button {
+                        onPick(product)
+                    } label: {
+                        PaywallPlanRowView(
+                            product: product,
+                            isPicked: pickedProd?.productId == product.productId,
+                            planTitle: planTitle(product),
+                            planSubtitle: planSubtitle(product),
+                            planPriceText: planPriceText(product)
+                        )
+                    }
+                    .disabled(isLoading)
+                }
+            }
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PaywallPlanRowView.swift
+////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/PaywallPlanRowView.swift
+////////////////////////////////////////////////////////////
+
+import ApphudSDK
+import SwiftUI
+
+struct PaywallPlanRowView: View {
+
+    let product: ApphudProduct
+    let isPicked: Bool
+
+    let planTitle: String
+    let planSubtitle: String
+    let planPriceText: String
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(
+                cornerRadius: PaywallLayout.optionCorner,
+                style: .continuous
+            )
+            .fill(Tokens.Color.componentsBackground)
+            .overlay(
+                RoundedRectangle(
+                    cornerRadius: PaywallLayout.optionCorner,
+                    style: .continuous
+                )
+                .stroke(
+                    isPicked
+                        ? Tokens.Color.accent
+                        : Tokens.Color.textThirdcondary.opacity(0.25),
+                    lineWidth: isPicked ? 2.scale : 1.scale
+                )
+            )
+
+            HStack(spacing: 12.scale) {
+                VStack(alignment: .leading, spacing: 4.scale) {
+                    Text(planTitle)
+                        .font(Tokens.Font.semibold17)
+                        .foregroundStyle(Tokens.Color.textPrimary)
+
+                    Text(planSubtitle)
+                        .font(Tokens.Font.regular13)
+                        .foregroundStyle(Tokens.Color.textSecondary)
+                }
+
+                Spacer()
+
+                Text(planPriceText)
+                    .font(Tokens.Font.semibold17)
+                    .foregroundStyle(Tokens.Color.textPrimary)
+            }
+            .padding(.horizontal, 16.scale)
+            .frame(height: PaywallLayout.optionHeight)
+        }
+        .contentShape(
+            RoundedRectangle(
+                cornerRadius: PaywallLayout.optionCorner,
+                style: .continuous
+            )
+        )
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PaywallProductText.swift
+////////////////////////////////////////////////////////////
+
+//
+//  PaywallProductText.swift
+//  Claude
+//
+//  Created by Niiaz Khasanov on 1/30/26.
+//
+
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/PaywallProductText.swift
+////////////////////////////////////////////////////////////
+
+import ApphudSDK
+import Foundation
+
+enum PaywallProductText {
+
+    static func planTitle(for product: ApphudProduct, isEnglishUI: Bool) -> String {
+        let t = product.timeString.lowercased()
+        if isEnglishUI {
+            if t.contains("week") { return "Weekly" }
+            if t.contains("year") { return "Yearly" }
+            if t.contains("month") { return "Monthly" }
+            return product.timeString.capitalizingFirstLetter()
+        } else {
+            if t.contains("week") { return "Еженедельно" }
+            if t.contains("year") { return "Ежегодно" }
+            if t.contains("month") { return "Ежемесячно" }
+            return product.timeString.capitalizingFirstLetter()
+        }
+    }
+
+    static func planSubtitle(for product: ApphudProduct, isEnglishUI: Bool) -> String {
+        let t = product.timeString.lowercased()
+        if isEnglishUI {
+            if t.contains("week") { return "1 week" }
+            if t.contains("year") { return "12 month" }
+            if t.contains("month") { return "1 month" }
+            return ""
+        } else {
+            if t.contains("week") { return "1 неделя" }
+            if t.contains("year") { return "12 месяц" }
+            if t.contains("month") { return "1 месяц" }
+            return ""
+        }
+    }
+
+    static func planPriceText(for product: ApphudProduct, isEnglishUI: Bool) -> String {
+        if product.timeString.lowercased().contains("year") {
+            return isEnglishUI
+            ? "\(product.localizedPriceWeek) / week"
+            : "\(product.localizedPriceWeek) / неделя"
+        } else {
+            return product.localizedPrice
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PaywallTopContentView.swift
+////////////////////////////////////////////////////////////
+
+//
+//  PaywallTopContentView.swift
+//  Claude
+//
+//  Created by Niiaz Khasanov on 1/30/26.
+//
+
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/PaywallTopContentView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct PaywallTopContentView: View {
+
+    let isEnglishUI: Bool
+    let creationsCountText: String
+    let subtitle1: String
+    let subtitle2: String
+    let subtitle3: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18.scale) {
+            VStack(alignment: .leading, spacing: 10.scale) {
+                bulletRow(title: creationsCountText, subtitle: subtitle1)
+                bulletRow(title: isEnglishUI ? "All AI models" : "Все модели ИИ", subtitle: subtitle2)
+                bulletRow(title: isEnglishUI ? "Unlimited AI chat" : "Неограниченный чат с ИИ", subtitle: subtitle3)
+            }
+            .padding(.top, 86.scale)
+            .padding(.horizontal, 22.scale)
+
+            Spacer(minLength: 0)
+
+            HStack {
+                Spacer()
+                Image(isEnglishUI ? PaywallAssets.bgEn : PaywallAssets.bgRu)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: PaywallLayout.topImageSize.width, height: PaywallLayout.topImageSize.height)
+                    .opacity(0.0001)
+                Spacer()
+            }
+        }
+        .frame(height: 430.scale)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func bulletRow(title: String, subtitle: String) -> some View {
+        HStack(alignment: .top, spacing: 12.scale) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 16.scale, weight: .semibold))
+                .foregroundStyle(Color.white)
+                .frame(width: 20.scale, height: 20.scale, alignment: .topLeading)
+                .padding(.top, 2.scale)
+
+            VStack(alignment: .leading, spacing: 4.scale) {
+                Text(title)
+                    .font(.system(size: 22.scale, weight: .semibold))
+                    .foregroundStyle(Color.white)
+
+                Text(subtitle)
+                    .font(.system(size: 15.scale, weight: .regular))
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PaywallView.swift
+////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////
+// FILE: Claude/Billing/Views/Walls/Paywall/PaywallView.swift
+////////////////////////////////////////////////////////////
+
+import ApphudSDK
+import SwiftUI
+
+struct PaywallView: View {
+
+    @EnvironmentObject private var purchaseManager: PurchaseManager
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+
+    // MARK: - External callbacks
+    private let onClose: (() -> Void)?
+
+    // MARK: - State
+    @State private var pickedProd: ApphudProduct?
+    @State private var showErrorAlert: Bool = false
+
+    // MARK: - Init
+    init(onClose: (() -> Void)? = nil) {
+        self.onClose = onClose
+    }
+
+    // MARK: - Derived
+
+    private var isEnglishUI: Bool {
+        let lang = Locale.current.languageCode ?? "en"
+        return lang != "ru"
+    }
+
+    private var isYearlyPicked: Bool {
+        guard let pickedProd else { return false }
+        return pickedProd.timeString.lowercased().contains("year")
+    }
+
+    private var creationsCountText: String {
+        let n = isYearlyPicked ? 50 : 5
+        return isEnglishUI ? "\(n) AI media creations" : "\(n) Медиа-творений с ИИ"
+    }
+
+    private var subtitle1: String {
+        isEnglishUI
+        ? "Create more images, videos and effects"
+        : "Создавайте больше изображений,\nвидео и эффектов"
+    }
+
+    private var subtitle2: String {
+        isEnglishUI
+        ? "Full customization of your AI assistant"
+        : "Полная кастомизация вашего\nAI-ассистента"
+    }
+
+    private var subtitle3: String {
+        isEnglishUI
+        ? "Unlimited AI chat anytime"
+        : "Безлимитное общение с AI в любое время"
+    }
+
+    private var titleText: String {
+        isEnglishUI ? "Get full access" : "Получите полный доступ"
+    }
+
+    private var continueText: String {
+        isEnglishUI ? "Continue" : "Продолжить"
+    }
+
+    private var cancelText: String {
+        isEnglishUI ? "Cancel anytime" : "Отменить в любое время"
+    }
+
+    private var footerTerms: String { isEnglishUI ? "Terms" : "Условия" }
+    private var footerRestore: String { isEnglishUI ? "Restore" : "Восстановить" }
+    private var footerPrivacy: String { isEnglishUI ? "Privacy" : "Конфиденциальность" }
+
+    // TODO: потом заменишь на реальные
+    private var termsURL: URL? { nil }
+    private var privacyURL: URL? { nil }
+
+    private var sortedProductsForUI: [ApphudProduct] {
+        purchaseManager.products.paywallSortedProducts()
+    }
+
+    // MARK: - Body
+
+    var body: some View {
+        ZStack {
+            PaywallBackgroundView(isEnglishUI: isEnglishUI)
+
+            VStack(spacing: 0) {
+                PaywallTopContentView(
+                    isEnglishUI: isEnglishUI,
+                    creationsCountText: creationsCountText,
+                    subtitle1: subtitle1,
+                    subtitle2: subtitle2,
+                    subtitle3: subtitle3
+                )
+
+                PaywallBottomCardView(
+                    titleText: titleText,
+                    cancelText: cancelText,
+                    continueText: continueText,
+                    footerTerms: footerTerms,
+                    footerRestore: footerRestore,
+                    footerPrivacy: footerPrivacy,
+                    termsURL: termsURL,
+                    privacyURL: privacyURL,
+                    openURL: openURL,
+                    products: purchaseManager.products,
+                    sortedProductsForUI: sortedProductsForUI,
+                    purchaseState: purchaseManager.purchaseState,
+                    isReady: purchaseManager.isReady,
+                    isLoading: purchaseManager.isLoading,
+                    pickedProd: $pickedProd,
+                    onPick: { pickedProd = $0 },
+                    onRestore: { purchaseManager.restorePurchase { _ in } },
+                    onContinue: { product in
+                        purchaseManager.makePurchase(product: product) { success, _ in
+                            if success { close() }
+                        }
+                    },
+                    planTitle: { product in
+                        PaywallProductText.planTitle(for: product, isEnglishUI: isEnglishUI)
+                    },
+                    planSubtitle: { product in
+                        PaywallProductText.planSubtitle(for: product, isEnglishUI: isEnglishUI)
+                    },
+                    planPriceText: { product in
+                        PaywallProductText.planPriceText(for: product, isEnglishUI: isEnglishUI)
+                    }
+                )
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .ignoresSafeArea()
+        .alert("Error", isPresented: $showErrorAlert) {
+            Button("Ok", role: .cancel) {
+                purchaseManager.failRestoreText = nil
+                purchaseManager.purchaseError = nil
+            }
+        } message: {
+            Text(purchaseManager.purchaseError ?? purchaseManager.failRestoreText ?? "")
+        }
+        .onAppear {
+            pickDefaultProductIfNeeded()
+            if purchaseManager.purchaseError != nil || purchaseManager.failRestoreText != nil {
+                showErrorAlert = true
+            }
+        }
+        .onChange(of: purchaseManager.failRestoreText != nil) { _, newValue in
+            if newValue { showErrorAlert = true }
+        }
+        .onChange(of: purchaseManager.purchaseError != nil) { _, newValue in
+            if newValue { showErrorAlert = true }
+        }
+        .overlay(alignment: .topTrailing) {
+            PaywallCloseButton(
+                isDisabled: purchaseManager.isLoading,
+                isHidden: purchaseManager.isLoading,
+                onTap: { close() }
+            )
+        }
+        .overlay {
+            if purchaseManager.isLoading {
+                PaywallLoadingOverlayView()
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: purchaseManager.isLoading)
+        .onChange(of: purchaseManager.isSubscribed) { _, newValue in
+            guard newValue else { return }
+            close()
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func pickDefaultProductIfNeeded() {
+        guard pickedProd == nil else { return }
+        guard !purchaseManager.products.isEmpty else { return }
+
+        if let yearly = purchaseManager.products.first(where: { $0.timeString.lowercased().contains("year") }) {
+            pickedProd = yearly
+        } else {
+            pickedProd = purchaseManager.products.min(by: { $0.price < $1.price })
+        }
+    }
+
+    private func close() {
+        onClose?()
+        dismiss()
+    }
+}
+
+

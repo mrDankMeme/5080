@@ -1,0 +1,1429 @@
+////////////////////////////////////////////////////////////
+// FILE: BotSettings/BotInstructionsBuilder.swift
+////////////////////////////////////////////////////////////
+
+import Foundation
+
+public enum BotInstructionsBuilder {
+
+    public static func build(profile: BotProfile, maxLength: Int = 1800) -> String? {
+
+        func clean(_ s: String) -> String {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false else { return "" }
+
+            let parts = trimmed.split(whereSeparator: { $0.isWhitespace })
+            return parts.joined(separator: " ")
+        }
+
+        let userName = clean(profile.userName)
+        let botName = clean(profile.botName)
+        let style = clean(profile.styleText)
+        let context = clean(profile.contextText)
+
+        let defaultBotName = clean(BotProfile().botName)
+        let isCustomBotName: Bool = botName.isEmpty == false && botName != defaultBotName
+
+        var lines: [String] = []
+
+        if userName.isEmpty == false {
+            lines.append(
+                String(
+                    format: "bot_instructions.address_me".localizable,
+                    userName
+                )
+            )
+        }
+
+        if isCustomBotName {
+            lines.append(
+                String(
+                    format: "bot_instructions.bot_name".localizable,
+                    botName
+                )
+            )
+        }
+
+        if style.isEmpty == false {
+            lines.append(
+                String(
+                    format: "bot_instructions.style".localizable,
+                    style
+                )
+            )
+        }
+
+        if context.isEmpty == false {
+            lines.append(
+                String(
+                    format: "bot_instructions.context".localizable,
+                    context
+                )
+            )
+        }
+
+        guard lines.isEmpty == false else { return nil }
+
+        var result = lines.joined(separator: "\n")
+        result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.isEmpty == false else { return nil }
+
+        guard result.count > maxLength else { return result }
+
+        let safeMax = max(0, maxLength)
+        let endIdx = result.index(result.startIndex, offsetBy: min(result.count, safeMax))
+        var cut = String(result[..<endIdx]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if cut.isEmpty == false && cut.count < maxLength {
+            cut += "…"
+        }
+
+        return cut.isEmpty ? nil : cut
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: BotSettings/BotProfile.swift
+////////////////////////////////////////////////////////////
+
+
+
+
+import Foundation
+
+public struct BotProfile: Equatable, Codable, Sendable {
+
+    public var userName: String
+    public var botName: String
+    public var styleText: String
+    public var contextText: String
+
+    public init(
+        userName: String = "",
+        botName: String = "Sonnet",
+        styleText: String = "",
+        contextText: String = ""
+    ) {
+        self.userName = userName
+        self.botName = botName
+        self.styleText = styleText
+        self.contextText = contextText
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: BotSettings/BotProfileStore.swift
+////////////////////////////////////////////////////////////
+
+
+
+
+import Foundation
+
+public protocol BotProfileStore: Sendable {
+    func load() -> BotProfile
+    func save(_ profile: BotProfile)
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: BotSettings/BotSettingsView.swift
+////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////
+// FILE: BotSettings/BotSettingsView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct BotSettingsView: View {
+
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var purchaseManager: PurchaseManager
+
+    @StateObject private var vm: BotSettingsViewModel
+
+    // MARK: - Paywall
+
+    @State private var isPaywallPresented: Bool = false
+
+    // MARK: - Assets (добавишь в Assets)
+
+    private enum Assets {
+        static let back = "ic_settings_back"
+        static let botAvatar = "ic_bot_avatar_96"
+    }
+
+    // MARK: - Layout
+
+    private let hPadding: CGFloat = Tokens.Spacing.x16
+    private let cornerRadius: CGFloat = Tokens.Radius.medium
+
+    private let fieldHeight: CGFloat = 56.scale
+    private let styleHeight: CGFloat = 137.scale
+    private let contextHeight: CGFloat = 187.scale
+
+    private let avatarSize: CGFloat = 96.scale
+    private let upgradeButtonHeight: CGFloat = 40.scale
+
+    init(vm: BotSettingsViewModel) {
+        _vm = StateObject(wrappedValue: vm)
+    }
+
+    var body: some View {
+        ZStack {
+            Color.white.ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16.scale) {
+
+                    header
+                        .padding(.horizontal, hPadding)
+                        .padding(.top, 10.scale)
+
+                    topAvatar
+                        .padding(.horizontal, hPadding)
+                        .padding(.top, 4.scale)
+
+                    if purchaseManager.isSubscribed {
+                        customizationFields
+                            .padding(.top, 6.scale)
+                    } else {
+                        upgradeCard
+                            .padding(.horizontal, hPadding)
+                            .padding(.top, 6.scale)
+                    }
+
+                    Spacer(minLength: 24.scale)
+                }
+                .padding(.bottom, 24.scale)
+            }
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .fullScreenCover(isPresented: $isPaywallPresented) {
+            paywallHostView
+        }
+        .onChange(of: purchaseManager.isSubscribed) { _, newValue in
+            if newValue {
+                isPaywallPresented = false
+            }
+        }
+    }
+
+    // MARK: - Header (как в SettingsView)
+
+    private var header: some View {
+        HStack {
+            Button { dismiss() } label: {
+                Image(Assets.back)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 40.scale, height: 40.scale, alignment: .center)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Text("bot_settings.title".localizable)
+                .font(Tokens.Font.semibold16)
+                .foregroundStyle(Color.black)
+
+            Spacer()
+
+            Color.clear
+                .frame(width: 44.scale, height: 44.scale)
+        }
+    }
+
+    // MARK: - Avatar
+
+    private var topAvatar: some View {
+        VStack(spacing: 12.scale) {
+            Image(Assets.botAvatar)
+                .resizable()
+                .scaledToFit()
+                .frame(width: avatarSize, height: avatarSize)
+
+            Text("bot_settings.bot_display_name".localizable)
+                .font(Tokens.Font.regular16)
+                .foregroundStyle(Color.black)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 8.scale)
+    }
+
+    // MARK: - Upgrade card (видно только без подписки)
+
+    private var upgradeCard: some View {
+        VStack(alignment: .leading, spacing: 12.scale) {
+
+            Text("bot_settings.upgrade.description".localizable)
+                .font(Tokens.Font.regular15)
+                .foregroundStyle(Color.black)
+                .multilineTextAlignment(.leading)
+                .padding(.horizontal, 16.scale)
+
+            Button {
+                isPaywallPresented = true
+            } label: {
+                Text("bot_settings.upgrade.cta".localizable)
+                    .font(Tokens.Font.regular16)
+                    .foregroundStyle(Color.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: upgradeButtonHeight)
+                    .background(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(Tokens.Color.accent)
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16.scale)
+            .padding(.bottom, 16.scale)
+        }
+        .padding(.top, 16.scale)
+        .background(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(Tokens.Color.accent.opacity(0.15))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Color.black.opacity(0.0), lineWidth: 0)
+        )
+    }
+
+    // MARK: - Premium fields (видно только с подпиской)
+
+    private var customizationFields: some View {
+        VStack(alignment: .leading, spacing: 0) {
+
+            VStack(alignment: .leading, spacing: 10.scale) {
+                fieldLabel("bot_settings.field.user_name.label".localizable)
+                textField(
+                    text: $vm.userName,
+                    placeholder: "bot_settings.field.user_name.placeholder".localizable,
+                    height: fieldHeight
+                )
+            }
+            .padding(.horizontal, hPadding)
+            .padding(.top, 4.scale)
+
+            VStack(alignment: .leading, spacing: 10.scale) {
+                fieldLabel("bot_settings.field.bot_name.label".localizable)
+                textField(
+                    text: $vm.botName,
+                    placeholder: "bot_settings.field.bot_name.placeholder".localizable,
+                    height: fieldHeight
+                )
+            }
+            .padding(.horizontal, hPadding)
+            .padding(.top, 10.scale)
+
+            VStack(alignment: .leading, spacing: 10.scale) {
+                fieldLabel("bot_settings.field.style.label".localizable)
+                textEditorField(
+                    text: $vm.styleText,
+                    placeholder: "bot_settings.field.style.placeholder".localizable,
+                    height: styleHeight
+                )
+            }
+            .padding(.horizontal, hPadding)
+            .padding(.top, 10.scale)
+
+            VStack(alignment: .leading, spacing: 10.scale) {
+                fieldLabel("bot_settings.field.context.label".localizable)
+                textEditorField(
+                    text: $vm.contextText,
+                    placeholder: "bot_settings.field.context.placeholder".localizable,
+                    height: contextHeight
+                )
+            }
+            .padding(.horizontal, hPadding)
+            .padding(.top, 10.scale)
+        }
+    }
+
+    // MARK: - Paywall host
+
+    @ViewBuilder
+    private var paywallHostView: some View {
+        Group {
+            if purchaseManager.isRus {
+                APIPaywallView(
+                    onClose: { isPaywallPresented = false }
+                )
+                .environmentObject(purchaseManager)
+                .ignoresSafeArea()
+            } else {
+                PaywallView(
+                    onClose: { isPaywallPresented = false }
+                )
+                .environmentObject(purchaseManager)
+                .ignoresSafeArea()
+            }
+        }
+    }
+
+    // MARK: - Labels
+
+    private func fieldLabel(_ text: String) -> some View {
+        Text(text)
+            .font(Tokens.Font.regular16)
+            .foregroundStyle(Color.black.opacity(0.70))
+    }
+
+    // MARK: - Fields
+
+    private func textField(
+        text: Binding<String>,
+        placeholder: String,
+        height: CGFloat
+    ) -> some View {
+        ZStack(alignment: .leading) {
+            if text.wrappedValue.isEmpty {
+                Text(placeholder)
+                    .font(Tokens.Font.regular17)
+                    .foregroundStyle(Color.black.opacity(0.50))
+                    .padding(.horizontal, 16.scale)
+            }
+
+            TextField("", text: text)
+                .textFieldStyle(.plain)
+                .font(Tokens.Font.regular17)
+                .foregroundStyle(Color.black)
+                .padding(.horizontal, 16.scale)
+        }
+        .frame(height: height)
+        .background(Color(hex: "F2F2F2") ?? Color.black.opacity(0.06))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Tokens.Color.accent, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    private func textEditorField(
+        text: Binding<String>,
+        placeholder: String,
+        height: CGFloat
+    ) -> some View {
+        ZStack(alignment: .topLeading) {
+            if text.wrappedValue.isEmpty {
+                Text(placeholder)
+                    .font(Tokens.Font.regular17)
+                    .foregroundStyle(Color.black.opacity(0.50))
+                    .padding(.horizontal, 16.scale)
+                    .padding(.top, 14.scale)
+            }
+
+            TextEditor(text: text)
+                .font(Tokens.Font.regular17)
+                .foregroundStyle(Color.black)
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 12.scale)
+                .padding(.top, 6.scale)
+        }
+        .frame(height: height)
+        .background(Color(hex: "F2F2F2") ?? Color.black.opacity(0.06))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Tokens.Color.accent, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: BotSettings/BotSettingsViewModel.swift
+////////////////////////////////////////////////////////////
+
+
+
+
+import Foundation
+import Combine
+
+@MainActor
+final class BotSettingsViewModel: ObservableObject {
+
+    // MARK: - Output (bind to UI)
+
+    @Published var userName: String = ""
+    @Published var botName: String = "Sonnet"
+    @Published var styleText: String = ""
+    @Published var contextText: String = ""
+
+    // MARK: - Dependencies
+
+    private let store: BotProfileStore
+
+    // MARK: - Private
+
+    private var cancellables: Set<AnyCancellable> = []
+
+    init(store: BotProfileStore) {
+        self.store = store
+
+        let profile = store.load()
+        self.userName = profile.userName
+        self.botName = profile.botName
+        self.styleText = profile.styleText
+        self.contextText = profile.contextText
+
+        bindAutoSave()
+    }
+
+    private func bindAutoSave() {
+        $userName
+            .dropFirst()
+            .sink { [weak self] _ in self?.persist() }
+            .store(in: &cancellables)
+
+        $botName
+            .dropFirst()
+            .sink { [weak self] _ in self?.persist() }
+            .store(in: &cancellables)
+
+        $styleText
+            .dropFirst()
+            .sink { [weak self] _ in self?.persist() }
+            .store(in: &cancellables)
+
+        $contextText
+            .dropFirst()
+            .sink { [weak self] _ in self?.persist() }
+            .store(in: &cancellables)
+    }
+
+    private func persist() {
+        let profile = BotProfile(
+            userName: userName,
+            botName: botName,
+            styleText: styleText,
+            contextText: contextText
+        )
+        store.save(profile)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: BotSettings/UserDefaultsBotProfileStore.swift
+////////////////////////////////////////////////////////////
+
+
+
+
+import Foundation
+
+final class UserDefaultsBotProfileStore: BotProfileStore {
+
+    private enum Keys {
+        static let userName = "bot.profile.userName"
+        static let botName = "bot.profile.botName"
+        static let style = "bot.profile.style"
+        static let context = "bot.profile.context"
+    }
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func load() -> BotProfile {
+        let userName = defaults.string(forKey: Keys.userName) ?? ""
+        let botNameRaw = defaults.string(forKey: Keys.botName)
+        let botName = (botNameRaw?.isEmpty == false) ? (botNameRaw ?? "Sonnet") : "Sonnet"
+
+        let styleText = defaults.string(forKey: Keys.style) ?? ""
+        let contextText = defaults.string(forKey: Keys.context) ?? ""
+
+        return BotProfile(
+            userName: userName,
+            botName: botName,
+            styleText: styleText,
+            contextText: contextText
+        )
+    }
+
+    func save(_ profile: BotProfile) {
+        defaults.set(profile.userName, forKey: Keys.userName)
+        defaults.set(profile.botName, forKey: Keys.botName)
+        defaults.set(profile.styleText, forKey: Keys.style)
+        defaults.set(profile.contextText, forKey: Keys.context)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: SettingsView/AboutView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct AboutView: View {
+
+    @Environment(\.dismiss) private var dismiss
+
+    let appStoreURL: URL
+    let privacyURL: URL
+    let termsURL: URL
+    let supportFormURL: URL
+
+    let onOpenURL: (URL) -> Void
+
+    private let titleFont = Tokens.Font.semibold16
+    private let subtitleFont = Tokens.Font.regular15
+    private let smallFont = Tokens.Font.regular13
+
+    private let bg = Color.white
+    private let cardBG = Color(hex: "F2F2F2") ?? Color.black.opacity(0.06)
+
+    var body: some View {
+        ZStack {
+            bg.ignoresSafeArea()
+
+            VStack(spacing: 12.scale) {
+                header
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12.scale) {
+                        appInfoCard
+                        noteCard
+                        // linksCard // сейчас не используется — оставил как было (закомментировано логически)
+                    }
+                    .padding(.horizontal, Tokens.Spacing.x16)
+                    .padding(.bottom, 20.scale)
+                }
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16.scale, weight: .semibold))
+                    .foregroundStyle(Color.black.opacity(0.7))
+                    .frame(width: 40.scale, height: 40.scale)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Text("about.title".localizable)
+                .font(titleFont)
+                .foregroundStyle(Color.black)
+
+            Spacer()
+
+            Color.clear.frame(width: 40.scale, height: 40.scale)
+        }
+        .padding(.horizontal, Tokens.Spacing.x16)
+        .padding(.top, 12.scale)
+    }
+
+    private var appInfoCard: some View {
+        VStack(alignment: .leading, spacing: 10.scale) {
+            Text("Virelto")
+                .font(Tokens.Font.medium16)
+                .foregroundStyle(Color.black)
+
+            Text(versionLine)
+                .font(subtitleFont)
+                .foregroundStyle(Color.black.opacity(0.75))
+        }
+        .padding(14.scale)
+        .background(cardBG)
+        .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.medium, style: .continuous))
+    }
+
+    private var linksCard: some View {
+        VStack(spacing: 0) {
+            row(title: "about.link.privacy".localizable) { onOpenURL(privacyURL) }
+            divider
+            row(title: "about.link.terms".localizable) { onOpenURL(termsURL) }
+            divider
+            row(title: "about.link.support_form".localizable) { onOpenURL(supportFormURL) }
+            divider
+            row(title: "about.link.app_store".localizable) { UIApplication.shared.open(appStoreURL) }
+        }
+        .background(cardBG)
+        .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.medium, style: .continuous))
+    }
+
+    private var noteCard: some View {
+        VStack(alignment: .leading, spacing: 8.scale) {
+            Text("about.note.title".localizable)
+                .font(Tokens.Font.medium16)
+                .foregroundStyle(Color.black)
+
+            Text("about.note.text".localizable)
+                .font(subtitleFont)
+                .foregroundStyle(Color.black.opacity(0.75))
+        }
+        .padding(14.scale)
+        .background(cardBG)
+        .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.medium, style: .continuous))
+    }
+
+    private func row(title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                    .font(Tokens.Font.medium16)
+                    .foregroundStyle(Color.black)
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 17.scale, weight: .semibold))
+                    .foregroundStyle(Color.black.opacity(0.35))
+            }
+            .padding(.horizontal, 16.scale)
+            .padding(.vertical, 14.scale)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(Tokens.Color.accent.opacity(0.20))
+            .frame(height: 1)
+            .padding(.horizontal, 20.5.scale)
+    }
+
+    private var versionLine: String {
+        let unknown = "common.unknown".localizable
+        let v = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? unknown
+        let b = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? unknown
+
+        return String(
+            format: "about.version_format".localizable,
+            v,
+            b
+        )
+    }
+
+    private var bundleLine: String {
+        let unknown = "common.unknown".localizable
+        let id = Bundle.main.bundleIdentifier ?? unknown
+        return String(format: "about.bundle_id_format".localizable, id)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: SettingsView/AppDiagnostics.swift
+////////////////////////////////////////////////////////////
+
+import Foundation
+import UIKit
+
+enum AppDiagnostics {
+
+    static func makeSupportDiagnosticsText() -> String {
+        let bundle = Bundle.main
+
+        let appName = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+        ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
+        ?? "common.app_fallback_name".localizable
+
+        let unknown = "common.unknown".localizable
+
+        let version = (bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? unknown
+        let build = (bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? unknown
+
+        let bundleId = bundle.bundleIdentifier ?? unknown
+
+        let device = UIDevice.current
+        let systemName = device.systemName
+        let systemVersion = device.systemVersion
+        let model = device.model
+
+        let locale = Locale.current.identifier
+        let tz = TimeZone.current.identifier
+        let preferredLang = Locale.preferredLanguages.first ?? unknown
+
+        let idfv = device.identifierForVendor?.uuidString ?? unknown
+
+        let nowISO: String = {
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return f.string(from: Date())
+        }()
+
+        return String(
+            format: "diagnostics.template".localizable,
+            appName,
+            version,
+            build,
+            bundleId,
+            model,
+            systemName,
+            systemVersion,
+            locale,
+            tz,
+            preferredLang,
+            idfv,
+            nowISO
+        )
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: SettingsView/MailComposerPayload.swift
+////////////////////////////////////////////////////////////
+
+
+
+
+import SwiftUI
+import MessageUI
+
+struct MailComposerPayload: Equatable, Sendable {
+    let to: String
+    let subject: String
+    let body: String
+    let isHTML: Bool
+
+    let fallbackMailToURL: URL?
+
+    static func makeMailToURL(to: String, subject: String, body: String) -> URL? {
+        var comps = URLComponents()
+        comps.scheme = "mailto"
+        comps.path = to
+        comps.queryItems = [
+            URLQueryItem(name: "subject", value: subject),
+            URLQueryItem(name: "body", value: body)
+        ]
+        return comps.url
+    }
+}
+
+struct MailComposerView: UIViewControllerRepresentable {
+
+    @Environment(\.dismiss) private var dismiss
+    let payload: MailComposerPayload
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        if MFMailComposeViewController.canSendMail() {
+            let vc = MFMailComposeViewController()
+            vc.mailComposeDelegate = context.coordinator
+            vc.setToRecipients([payload.to])
+            vc.setSubject(payload.subject)
+            vc.setMessageBody(payload.body, isHTML: payload.isHTML)
+            return vc
+        } else {
+            let vc = UIViewController()
+            DispatchQueue.main.async {
+                if let url = payload.fallbackMailToURL {
+                    UIApplication.shared.open(url)
+                }
+                dismiss()
+            }
+            return vc
+        }
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onFinish: { dismiss() })
+    }
+
+    final class Coordinator: NSObject, MFMailComposeViewControllerDelegate {
+        private let onFinish: () -> Void
+
+        init(onFinish: @escaping () -> Void) {
+            self.onFinish = onFinish
+        }
+
+        func mailComposeController(
+            _ controller: MFMailComposeViewController,
+            didFinishWith result: MFMailComposeResult,
+            error: Error?
+        ) {
+            controller.dismiss(animated: true) {
+                self.onFinish()
+            }
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: SettingsView/SafariWebView.swift
+////////////////////////////////////////////////////////////
+
+
+
+
+import SwiftUI
+import SafariServices
+
+struct SafariWebView: UIViewControllerRepresentable {
+
+    let url: URL
+
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        let vc = SFSafariViewController(url: url)
+        vc.dismissButtonStyle = .close
+        return vc
+    }
+
+    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: SettingsView/SettingsHostViewController.swift
+////////////////////////////////////////////////////////////
+
+
+
+
+import UIKit
+import SwiftUI
+import Swinject
+
+final class SettingsHostViewController: UIViewController {
+
+    private let resolver: Resolver
+
+    init(resolver: Resolver) {
+        self.resolver = resolver
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .white
+
+        let root = NavigationView {
+            SettingsView()
+        }
+        .environment(\.resolver, resolver)
+
+        let host = UIHostingController(rootView: root)
+
+        addChild(host)
+        view.addSubview(host.view)
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            host.view.topAnchor.constraint(equalTo: view.topAnchor),
+            host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+        host.didMove(toParent: self)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: SettingsView/SettingsView.swift
+////////////////////////////////////////////////////////////
+
+// FILE: SettingsView/SettingsView.swift
+
+import SwiftUI
+import Swinject
+
+struct SettingsView: View {
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.resolver) private var resolver
+    @EnvironmentObject private var purchaseManager: PurchaseManager
+
+    private enum Assets {
+        static let back = "ic_settings_back"
+        static let userAvatar = "ic_settings_user_64"
+
+        static let bot = "ic_settings_bot_40"
+        static let language = "ic_settings_language_40"
+        static let notifications = "ic_settings_notifications_40"
+        static let subscription = "ic_settings_subscription_40"
+        static let privacy = "ic_settings_privacy_40"
+        static let terms = "ic_settings_terms_40"
+        static let support = "ic_settings_support_40"
+        static let rate = "ic_settings_rate_40"
+        static let about = "ic_settings_about_40"
+
+        // если ассета нет — в UI просто будет пусто, не критично
+        static let cancel = "ic_settings_cancel_40"
+    }
+
+    private enum Links {
+        static let privacy = URL(string: "https://docs.google.com/document/d/1gO4kMiaVCuHeIjBC43qAzLfIatpo-5kpNE8Uov5QAzQ/edit?usp=sharing")!
+        static let terms = URL(string: "https://docs.google.com/document/d/1FsCLwpFngqIQgQ1e-0m6RkgO2lhKrSYG3BDdk7BsMzA/edit?usp=sharing")!
+        static let supportForm = URL(string: "https://forms.gle/MyCr6wzsCAU4VSMY7")!
+        static let appStore = URL(string: "https://apps.apple.com/us/app/veyl-ai-video-generator/id6760103981")!
+    }
+
+    private enum SupportEmail {
+        static let to = "dete8489@gmail.com"
+        static let subject = "settings.support.email_subject".localizable
+    }
+
+    private let screenHorizontalPadding: CGFloat = Tokens.Spacing.x16
+    private let sectionCornerRadius: CGFloat = Tokens.Radius.medium
+
+    private let sectionBG = Color(hex: "F2F2F2") ?? Color.black.opacity(0.06)
+    private let dividerHPadding: CGFloat = 20.5.scale
+
+    private let iconSize: CGFloat = 40.scale
+
+    private let headerTitleFont = Tokens.Font.semibold16
+    private let sectionTitleFont = Tokens.Font.regular15
+    private let rowTitleFont = Tokens.Font.medium16
+    private let rowSubtitleFont = Tokens.Font.regular15
+
+    private let subtitleColor: Color = Color.black.opacity(0.70)
+    private let sectionTitleColor: Color = Color.black.opacity(0.55)
+
+    // MARK: - UI State (Sheets / Navigation)
+
+    @State private var webURLToPresent: URL? = nil
+    @State private var isSupportMailPresented: Bool = false
+    @State private var supportMailPayload: MailComposerPayload? = nil
+    @State private var isAboutPresented: Bool = false
+
+    // MARK: - Paywall
+    @State private var isPaywallPresented: Bool = false
+
+    // MARK: - Cancel subscription (RU)
+
+    private enum CancelAlert: Identifiable {
+        case confirm
+        case success
+        case error(String?)
+
+        var id: String {
+            switch self {
+            case .confirm: return "confirm"
+            case .success: return "success"
+            case .error(let msg): return "error:\(msg ?? "nil")"
+            }
+        }
+    }
+
+    @State private var cancelAlert: CancelAlert? = nil
+    @State private var isCancellingSubscription: Bool = false
+
+    var body: some View {
+        ZStack {
+            Color.white.ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18.scale) {
+
+                    header
+                        .padding(.horizontal, screenHorizontalPadding)
+                        .padding(.top, 16.scale)
+
+                    sectionTitle("settings.section.personalization".localizable)
+                        .padding(.horizontal, screenHorizontalPadding)
+
+                    personalizationCard
+                        .padding(.horizontal, screenHorizontalPadding)
+
+                    sectionTitle("settings.section.notifications".localizable)
+                        .padding(.horizontal, screenHorizontalPadding)
+
+                    notificationsCard
+                        .padding(.horizontal, screenHorizontalPadding)
+
+                    sectionTitle("settings.section.subscription".localizable)
+                        .padding(.horizontal, screenHorizontalPadding)
+
+                    subscriptionCard
+                        .padding(.horizontal, screenHorizontalPadding)
+
+                    sectionTitle("settings.section.information".localizable)
+                        .padding(.horizontal, screenHorizontalPadding)
+
+                    infoCard
+                        .padding(.horizontal, screenHorizontalPadding)
+
+                    Spacer(minLength: 18.scale)
+                }
+                .padding(.bottom, 20.scale)
+            }
+
+            if isCancellingSubscription {
+                Color.black.opacity(0.10).ignoresSafeArea()
+                ProgressView().progressViewStyle(.circular).scaleEffect(1.2)
+            }
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .sheet(item: Binding(
+            get: { webURLToPresent.map { WebSheetURL(url: $0) } },
+            set: { webURLToPresent = $0?.url }
+        )) { item in
+            SafariWebView(url: item.url).ignoresSafeArea()
+        }
+        .sheet(isPresented: $isSupportMailPresented) {
+            if let payload = supportMailPayload {
+                MailComposerView(payload: payload)
+            } else {
+                VStack(spacing: 12) {
+                    Text("settings.support.mail_prepare_failed".localizable)
+                    Button("settings.common.close".localizable) { isSupportMailPresented = false }
+                }
+                .padding()
+            }
+        }
+        .sheet(isPresented: $isAboutPresented) {
+            AboutView(
+                appStoreURL: Links.appStore,
+                privacyURL: Links.privacy,
+                termsURL: Links.terms,
+                supportFormURL: Links.supportForm,
+                onOpenURL: { url in webURLToPresent = url }
+            )
+        }
+        .fullScreenCover(isPresented: $isPaywallPresented) {
+            paywallHostView
+        }
+        .onChange(of: purchaseManager.isSubscribed) { _, newValue in
+            if newValue { isPaywallPresented = false }
+        }
+        .alert(
+            cancelAlertTitle,
+            isPresented: Binding(
+                get: { cancelAlert != nil },
+                set: { if $0 == false { cancelAlert = nil } }
+            ),
+            actions: { cancelAlertActions },
+            message: { Text(cancelAlertMessage) }
+        )
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack {
+            Button { dismiss() } label: {
+                Image(Assets.back)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 40.scale, height: 40.scale)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Text("settings.title".localizable)
+                .font(headerTitleFont)
+                .foregroundStyle(Color.black)
+
+            Spacer()
+
+            Color.clear.frame(width: 44.scale, height: 44.scale)
+        }
+    }
+
+    // MARK: - Cards
+
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(sectionTitleFont)
+            .foregroundStyle(sectionTitleColor)
+    }
+
+    private var personalizationCard: some View {
+        sectionCard {
+            NavigationLink {
+                BotSettingsView(vm: makeBotSettingsVM())
+            } label: {
+                settingsRowContent(
+                    iconAsset: Assets.bot,
+                    title: "settings.row.bot_settings.title".localizable,
+                    subtitle: "settings.row.bot_settings.subtitle".localizable
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var notificationsCard: some View {
+        sectionCard {
+            Button { } label: {
+                settingsRowContent(
+                    iconAsset: Assets.notifications,
+                    title: "settings.row.notifications.title".localizable,
+                    subtitle: "settings.row.notifications.subtitle".localizable
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var subscriptionCard: some View {
+        sectionCard {
+            Button { isPaywallPresented = true } label: {
+                settingsRowContent(
+                    iconAsset: Assets.subscription,
+                    title: "Chad AI Pro",
+                    subtitle: "settings.row.subscription.subtitle".localizable
+                )
+            }
+            .buttonStyle(.plain)
+
+            if purchaseManager.isRus {
+                sectionDivider
+
+                Button {
+                    cancelAlert = .confirm
+                } label: {
+                    settingsRowContent(
+                        iconAsset: Assets.cancel,
+                        title: "Отменить подписку",
+                        subtitle: "Вы сможете пользоваться подпиской до конца оплаченного периода."
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var infoCard: some View {
+        sectionCard {
+            Button { webURLToPresent = Links.privacy } label: {
+                settingsRowContent(iconAsset: Assets.privacy, title: "settings.row.privacy.title".localizable, subtitle: nil)
+            }
+            .buttonStyle(.plain)
+
+            sectionDivider
+
+            Button { webURLToPresent = Links.terms } label: {
+                settingsRowContent(iconAsset: Assets.terms, title: "settings.row.terms.title".localizable, subtitle: nil)
+            }
+            .buttonStyle(.plain)
+
+            sectionDivider
+
+            Button { presentSupportEmail() } label: {
+                settingsRowContent(
+                    iconAsset: Assets.support,
+                    title: "settings.row.support.title".localizable,
+                    subtitle: "settings.row.support.subtitle".localizable
+                )
+            }
+            .buttonStyle(.plain)
+
+            sectionDivider
+
+            Button { openAppStoreReview() } label: {
+                settingsRowContent(iconAsset: Assets.rate, title: "settings.row.rate.title".localizable, subtitle: nil)
+            }
+            .buttonStyle(.plain)
+
+            sectionDivider
+
+            Button { isAboutPresented = true } label: {
+                settingsRowContent(
+                    iconAsset: Assets.about,
+                    title: "settings.row.about.title".localizable,
+                    subtitle: "settings.row.about.subtitle".localizable
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: - Paywall host
+
+    @ViewBuilder
+    private var paywallHostView: some View {
+        Group {
+            if purchaseManager.isRus {
+                APIPaywallView(onClose: { isPaywallPresented = false })
+                    .environmentObject(purchaseManager)
+                    .ignoresSafeArea()
+            } else {
+                PaywallView(onClose: { isPaywallPresented = false })
+                    .environmentObject(purchaseManager)
+                    .ignoresSafeArea()
+            }
+        }
+    }
+
+    // MARK: - DI
+
+    private func makeBotSettingsVM() -> BotSettingsViewModel {
+        resolver.resolve(BotSettingsViewModel.self)!
+    }
+
+    // MARK: - Actions
+
+    private func presentSupportEmail() {
+        let diagnostics = AppDiagnostics.makeSupportDiagnosticsText()
+        let body = String(format: "settings.support.email_body_template".localizable, diagnostics)
+
+        supportMailPayload = MailComposerPayload(
+            to: SupportEmail.to,
+            subject: SupportEmail.subject,
+            body: body,
+            isHTML: false,
+            fallbackMailToURL: MailComposerPayload.makeMailToURL(
+                to: SupportEmail.to,
+                subject: SupportEmail.subject,
+                body: body
+            )
+        )
+        isSupportMailPresented = true
+    }
+
+    private func openAppStoreReview() {
+        UIApplication.shared.open(Links.appStore)
+    }
+
+    @MainActor
+    private func cancelRussianSubscription() async {
+        guard isCancellingSubscription == false else { return }
+
+        isCancellingSubscription = true
+        defer { isCancellingSubscription = false }
+
+        do {
+            let result = try await APIPaymentManager.shared.cancelSubscription(userId: purchaseManager.userId)
+            cancelAlert = result.isSuccess ? .success : .error(result.errorMessage)
+        } catch {
+            // <- NEW: делаем user-friendly текст
+            cancelAlert = .error(makeFriendlyCancelErrorText(error))
+        }
+    }
+
+    private func makeFriendlyCancelErrorText(_ error: Error) -> String {
+        let raw = error.localizedDescription
+        let lowered = raw.lowercased()
+
+        // главный кейс из твоего лога
+        if lowered.contains("user hasn't subscription") || lowered.contains("hasn't subscription") || lowered.contains("no subscription") {
+            return "У вас нет активной подписки."
+        }
+
+        // если бэк вернул что-то понятное — покажем как есть
+        if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return raw
+        }
+
+        return "Не удалось отменить подписку."
+    }
+
+    // MARK: - Alerts
+
+    private var cancelAlertTitle: String {
+        switch cancelAlert {
+        case .confirm: return "Отмена подписки"
+        case .success: return "Подписка отменена"
+        case .error: return "Ошибка"
+        case .none: return ""
+        }
+    }
+
+    private var cancelAlertMessage: String {
+        switch cancelAlert {
+        case .confirm:
+            return "Вы уверены, что хотите отменить подписку? По окончании расчётного периода вы потеряете доступ к премиум-функциям."
+        case .success:
+            return "Вы сохраните доступ до конца оплаченного периода."
+        case .error(let msg):
+            return msg ?? "Не удалось отменить подписку."
+        case .none:
+            return ""
+        }
+    }
+
+    @ViewBuilder
+    private var cancelAlertActions: some View {
+        switch cancelAlert {
+        case .confirm:
+            Button("Отменить", role: .destructive) {
+                Task { @MainActor in await cancelRussianSubscription() }
+            }
+            Button("Закрыть", role: .cancel) { }
+        case .success:
+            Button("ОК", role: .cancel) { }
+        case .error:
+            Button("ОК", role: .cancel) { }
+        case .none:
+            EmptyView()
+        }
+    }
+
+    // MARK: - UI helpers
+
+    private func sectionCard(@ViewBuilder content: () -> some View) -> some View {
+        VStack(spacing: 0) { content() }
+            .background(sectionBG)
+            .clipShape(RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous))
+    }
+
+    private var sectionDivider: some View {
+        Rectangle()
+            .fill(Tokens.Color.accent.opacity(0.20))
+            .frame(height: 1)
+            .padding(.horizontal, dividerHPadding)
+    }
+
+    private func settingsRowContent(iconAsset: String, title: String, subtitle: String?) -> some View {
+        HStack(spacing: 12.scale) {
+            Image(iconAsset)
+                .resizable()
+                .scaledToFit()
+                .frame(width: iconSize, height: iconSize)
+
+            VStack(alignment: .leading, spacing: 4.scale) {
+                Text(title)
+                    .font(rowTitleFont)
+                    .foregroundStyle(Color.black)
+
+                if let subtitle, subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                    Text(subtitle)
+                        .font(rowSubtitleFont)
+                        .foregroundStyle(subtitleColor)
+                        .lineLimit(3) // было 2
+                        .fixedSize(horizontal: false, vertical: true) // ✅ даст вырасти по высоте
+                }
+            }
+            .layoutPriority(1) // ✅ чтобы VStack не “сжимался” из-за chevron
+
+            Spacer(minLength: 0)
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 17.scale, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.35))
+        }
+        .padding(.horizontal, 16.scale)
+        .padding(.vertical, 16.scale) // было 14 — чуть комфортнее под 2-3 строки
+        .contentShape(Rectangle())
+    }
+
+}
+
+// MARK: - Helpers
+
+private struct WebSheetURL: Identifiable, Equatable {
+    let id: String
+    let url: URL
+
+    init(url: URL) {
+        self.url = url
+        self.id = url.absoluteString
+    }
+}

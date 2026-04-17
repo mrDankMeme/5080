@@ -1,0 +1,2154 @@
+////////////////////////////////////////////////////////////
+// FILE: HomeMode.swift
+////////////////////////////////////////////////////////////
+
+import Foundation
+
+enum HomeMode: CaseIterable, Identifiable {
+    case chat
+    case image
+    case video
+
+    // Стабильный идентификатор (ключ), не зависит от языка
+    var id: String { key }
+
+    // Чтобы твой существующий UI `Text(item.rawValue)` работал без правок
+    var rawValue: String { key.localizable }
+
+    // Ключ для Localizable.strings
+    private var key: String {
+        switch self {
+        case .chat: return "home.mode.chat"
+        case .image: return "home.mode.image"
+        case .video: return "home.mode.video"
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ImageModeHomeView.swift
+////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////
+// FILE: ImageModeHomeView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+import Swinject
+import Combine
+
+struct ImageModeHomeView: View {
+
+    // MARK: - Env
+
+    @Environment(\.resolver) var resolver
+    @Environment(\.scenePhase) private var scenePhase
+    @EnvironmentObject  var purchaseManager: PurchaseManager
+
+    // MARK: - State
+
+    @State var mode: HomeMode = .chat
+
+    @State var isNewChatActive: Bool = false
+    @State var newChatNavToken: UUID = UUID()
+
+    @State var composerText: String = ""
+    @State var quickChatInitialText: String = ""
+
+    @State var quickPromptAutoSend: Bool = false
+    @State var isQuickChatActive: Bool = false
+    @State var quickChatNavToken: UUID = UUID()
+
+    @State var isModelPickerPresented: Bool = false
+    @State var selectedModel: NeuralModelOption = .automatic
+
+    @State private var pendingLockedModel: NeuralModelOption? = nil
+
+    @State var isAutoOn: Bool = true
+
+    @State var isHomeRecordingSpeech: Bool = false
+    @State var homeSpeechTimerText: String = "00:00"
+    @State var homeSpeechSeconds: Int = 0
+    @State var homeSpeechTimerTask: Task<Void, Never>? = nil
+    @State var homeSpeechService: SpeechToTextService? = nil
+
+    @State var isUnifiedHistoryPresented: Bool = false
+    @State var pendingOpenNewChatFromHistory: Bool = false
+
+    @State var hasUnreadNotifications: Bool = false
+    @State var isNotificationsPresented: Bool = false
+
+    @State var pendingOpenGeneration: (kind: GenerationKind, threadId: UUID)? = nil
+    @State var isOpenGenerationActive: Bool = false
+    @State var openGenerationNavToken: UUID = UUID()
+
+    @State var pendingOpenAIConversationId: String? = nil
+    @State var isOpenAIChatActive: Bool = false
+    @State var openAIChatNavToken: UUID = UUID()
+
+    @State var notificationsPollTask: Task<Void, Never>? = nil
+
+    @State var totalRequests: Int = 0
+    @State var requestCounterPollTask: Task<Void, Never>? = nil
+
+    // ✅ STEP 3: daily chat sync scheduler
+    @State private var dailyChatSyncTask: Task<Void, Never>? = nil
+
+    @State var totalDialogs: Int = 0
+    @State var dialogsCountCancellable: AnyCancellable? = nil
+
+    // MARK: - Body
+
+    var body: some View {
+        NavigationView {
+            GeometryReader { geo in
+
+                let composerHeight: CGFloat = 64
+                let reservedBottom: CGFloat = composerHeight
+
+                ZStack(alignment: .bottom) {
+
+                    darkBG
+                        .ignoresSafeArea()
+
+                    NavigationLink(
+                        isActive: $isNewChatActive,
+                        destination: {
+                            OpenAITextChatView(vm: makeOpenAITextChatVM(reset: true))
+                                .id(newChatNavToken)
+                        },
+                        label: { EmptyView() }
+                    )
+                    .hidden()
+
+                    NavigationLink(
+                        isActive: $isOpenGenerationActive,
+                        destination: {
+                            if let p = pendingOpenGeneration {
+                                generationDestination(kind: p.kind, threadId: p.threadId)
+                                    .id(openGenerationNavToken)
+                            } else {
+                                EmptyView()
+                            }
+                        },
+                        label: { EmptyView() }
+                    )
+                    .hidden()
+
+                    NavigationLink(
+                        isActive: $isOpenAIChatActive,
+                        destination: {
+                            if let cid = pendingOpenAIConversationId, cid.isEmpty == false {
+                                OpenAIChatThreadView(
+                                    vm: makeOpenAITextChatVM(reset: false),
+                                    conversationId: cid
+                                )
+                                .id(openAIChatNavToken)
+                            } else {
+                                EmptyView()
+                            }
+                        },
+                        label: { EmptyView() }
+                    )
+                    .hidden()
+
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: 0) {
+
+                            darkHeaderSection
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(darkBG)
+                                .ignoresSafeArea(edges: .top)
+
+                            lightContentSection
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(lightBG)
+                                .frame(
+                                    minHeight: max(0, geo.size.height - reservedBottom),
+                                    alignment: .top
+                                )
+
+                            Color.clear
+                                .frame(height: 0)
+
+                            lightBG
+                                .frame(height: max(geo.safeAreaInsets.bottom, 18.scale))
+                        }
+                    }
+                    .ignoresSafeArea()
+                    .allowsHitTesting(isNotificationsPresented == false && isModelPickerPresented == false)
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            guard isNotificationsPresented == false, isModelPickerPresented == false else { return }
+                            UIApplication.dismissKeyboard()
+                        }
+                    )
+
+                    homeComposerBar
+                        .padding(.horizontal, Tokens.Spacing.x16)
+                        .padding(.bottom, 0.scale)
+                        .allowsHitTesting(isNotificationsPresented == false && isModelPickerPresented == false)
+
+                    if isNotificationsPresented {
+                        notificationsOverlay
+                            .transition(.opacity)
+                            .zIndex(1000)
+                    }
+
+                    if isModelPickerPresented {
+                        ModelPickerSheetOverlay(
+                            selected: $selectedModel,
+                            isPremiumUser: purchaseManager.isSubscribed,
+                            onRequestPremium: { lockedOption in
+                                pendingLockedModel = lockedOption
+                                showPaywallFromLockedTap()
+                            },
+                            onClose: {
+                                isModelPickerPresented = false
+                            }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(2000)
+                    }
+                }
+                .toolbar(.hidden, for: .tabBar)
+                .toolbar(.hidden, for: .navigationBar)
+            }
+        }
+
+        .fullScreenCover(
+            isPresented: Binding(
+                get: { purchaseManager.isShowedPaywall },
+                set: { purchaseManager.isShowedPaywall = $0 }
+            ),
+            onDismiss: {
+                handlePaywallDismiss()
+            },
+            content: {
+                paywallDestinationView()
+            }
+        )
+
+        .onChange(of: isNotificationsPresented) { isPresented in
+            guard isPresented == false else { return }
+
+            if pendingOpenGeneration != nil {
+                openGenerationNavToken = UUID()
+                isOpenGenerationActive = true
+                Task { await refreshNotificationsBadge() }
+                return
+            }
+
+            if let cid = pendingOpenAIConversationId, cid.isEmpty == false {
+                openAIChatNavToken = UUID()
+                isOpenAIChatActive = true
+                Task { await refreshNotificationsBadge() }
+                return
+            }
+
+            Task { await refreshNotificationsBadge() }
+        }
+
+        .sheet(isPresented: $isUnifiedHistoryPresented) {
+            NavigationStack {
+                UnifiedHistoryListView(
+                    vm: makeUnifiedHistoryListVM(),
+                    openAIDestinationBuilder: { conversationId in
+                        AnyView(
+                            OpenAIChatThreadView(
+                                vm: makeOpenAITextChatVM(reset: false),
+                                conversationId: conversationId
+                            )
+                        )
+                    },
+                    generationDestinationBuilder: { kind, threadId in
+                        AnyView(generationDestination(kind: kind, threadId: threadId))
+                    },
+                    onRequestNewChat: {
+                        pendingOpenNewChatFromHistory = true
+                        isUnifiedHistoryPresented = false
+                    }
+                )
+            }
+        }
+        .onChange(of: isUnifiedHistoryPresented) { isPresented in
+            guard isPresented == false else { return }
+            guard pendingOpenNewChatFromHistory else { return }
+
+            pendingOpenNewChatFromHistory = false
+            newChatNavToken = UUID()
+            isNewChatActive = true
+        }
+
+        .onAppear {
+            startNotificationsPollingIfNeeded()
+            startRequestCounterPollingIfNeeded()
+            startDialogsCountObservationIfNeeded()
+            startDailyChatSyncIfNeeded()
+        }
+        .onDisappear {
+            stopNotificationsPolling()
+            stopRequestCounterPolling()
+            stopDialogsCountObservation()
+            stopDailyChatSync()
+        }
+        .onChange(of: scenePhase) { phase in
+            switch phase {
+            case .active:
+                startNotificationsPollingIfNeeded()
+                startRequestCounterPollingIfNeeded()
+                startDialogsCountObservationIfNeeded()
+                startDailyChatSyncIfNeeded()
+            default:
+                stopNotificationsPolling()
+                stopRequestCounterPolling()
+                stopDialogsCountObservation()
+                stopDailyChatSync()
+            }
+        }
+    }
+
+    // MARK: - Daily chat sync scheduler
+
+    private func startDailyChatSyncIfNeeded() {
+        guard scenePhase == .active else { return }
+        guard dailyChatSyncTask == nil else { return }
+
+        dailyChatSyncTask = Task { [resolver] in
+            guard let scheduler = resolver.resolve(DailyChatCounterSyncScheduling.self) else { return }
+            await scheduler.startIfNeeded()
+        }
+    }
+
+    private func stopDailyChatSync() {
+        dailyChatSyncTask?.cancel()
+        dailyChatSyncTask = nil
+
+        Task { [resolver] in
+            guard let scheduler = resolver.resolve(DailyChatCounterSyncScheduling.self) else { return }
+            await scheduler.stop()
+        }
+    }
+
+    // MARK: - Paywall routing (RU / non-RU)
+
+    @MainActor
+    private func showPaywallFromLockedTap() {
+        // ✅ ModelPicker не трогаем — он должен оставаться на экране.
+        // Нужно только показать Paywall поверх.
+        //
+        // Иногда SwiftUI не реагирует, если значение уже true.
+        // Поэтому делаем "пинок": false -> true (следующим тиком).
+        if purchaseManager.isShowedPaywall {
+            purchaseManager.isShowedPaywall = false
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            purchaseManager.isShowedPaywall = true
+
+            #if DEBUG
+            print("💎 MODEL_PICKER: locked model tapped → show paywall (isRus=\(purchaseManager.isRus), subscribed=\(purchaseManager.isSubscribed))")
+            #endif
+        }
+    }
+
+    @MainActor
+    private func handlePaywallDismiss() {
+        // После закрытия Paywall:
+        // - Если покупка прошла => isSubscribed станет true => ModelPicker автоматически разблокируется
+        // - Опционально: выбираем ту модель, которую юзер хотел
+        guard purchaseManager.isSubscribed else {
+            pendingLockedModel = nil
+            return
+        }
+
+        if let wanted = pendingLockedModel {
+            selectedModel = wanted
+        }
+        pendingLockedModel = nil
+    }
+
+    @ViewBuilder
+    private func paywallDestinationView() -> some View {
+        if purchaseManager.isRus {
+            APIPaywallView()
+                .environment(\.resolver, resolver)
+                .environmentObject(purchaseManager)
+                .ignoresSafeArea()
+        } else {
+            PaywallView()
+                .environment(\.resolver, resolver)
+                .environmentObject(purchaseManager)
+                .ignoresSafeArea()
+        }
+    }
+
+    // MARK: - Notifications overlay view
+
+    private var notificationsOverlay: some View {
+        GeometryReader { geo in
+            ZStack {
+                Color.black.opacity(0.45)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        closeNotificationsOnly()
+                    }
+
+                NotificationsListView(
+                    vm: makeNotificationsListVM(),
+                    onSelect: { kind, threadId in
+                        pendingOpenGeneration = (kind: kind, threadId: threadId)
+                        pendingOpenAIConversationId = nil
+
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            isNotificationsPresented = false
+                        }
+                    },
+                    onSelectOpenAIChat: { conversationId in
+                        pendingOpenAIConversationId = conversationId
+                        pendingOpenGeneration = nil
+
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            isNotificationsPresented = false
+                        }
+                    },
+                    onClose: {
+                        closeNotificationsOnly()
+                    }
+                )
+                .frame(
+                    width: geo.size.width - (14.scale * 2),
+                    height: geo.size.height - (81.scale * 2)
+                )
+                .position(x: geo.size.width / 2, y: geo.size.height / 2)
+            }
+        }
+    }
+
+    @MainActor
+    private func closeNotificationsOnly() {
+        pendingOpenGeneration = nil
+        pendingOpenAIConversationId = nil
+
+        withAnimation(.easeOut(duration: 0.15)) {
+            isNotificationsPresented = false
+        }
+    }
+
+    @ViewBuilder
+    private func generationDestination(kind: GenerationKind, threadId: UUID) -> some View {
+        switch kind {
+        case .textToImage:
+            TextToImageChatView(vm: makeTextToImageVM(threadId: threadId))
+        case .photoEdit:
+            PhotoEditChatView(vm: makePhotoEditVM(threadId: threadId))
+        case .photoEnhance:
+            PhotoEnhanceChatView(vm: makePhotoEnhanceVM(threadId: threadId))
+        case .textToVideo:
+            TextToVideoChatView(vm: makeTextToVideoVM(threadId: threadId))
+        case .photoToVideo:
+            PhotoToVideoChatView(
+                vm: makePhotoToVideoVM(threadId: threadId),
+                imageCache: makeImageCache()
+            )
+        case .twoPhotosToVideo:
+            TwoPhotosToVideoChatView(vm: makeTwoPhotosToVideoVM(threadId: threadId))
+        }
+    }
+
+    // MARK: - Notifications polling
+
+    private func startNotificationsPollingIfNeeded() {
+        guard scenePhase == .active else { return }
+        guard notificationsPollTask == nil else { return }
+
+        notificationsPollTask = Task {
+            await refreshNotificationsBadge()
+
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                await refreshNotificationsBadge()
+            }
+        }
+    }
+
+    private func stopNotificationsPolling() {
+        notificationsPollTask?.cancel()
+        notificationsPollTask = nil
+    }
+
+    @MainActor
+    private func refreshNotificationsBadge() async {
+        guard let center = resolver.resolve(InternalNotificationCenter.self) else {
+            hasUnreadNotifications = false
+            return
+        }
+
+        let count = await center.unreadCount()
+        hasUnreadNotifications = (count > 0)
+    }
+
+    func onNotificationsTap() {
+        withAnimation(.easeOut(duration: 0.15)) {
+            isNotificationsPresented = true
+        }
+    }
+
+    // MARK: - Request counter polling
+
+    private func startRequestCounterPollingIfNeeded() {
+        guard scenePhase == .active else { return }
+        guard requestCounterPollTask == nil else { return }
+
+        requestCounterPollTask = Task {
+            await refreshTotalRequests()
+
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                await refreshTotalRequests()
+            }
+        }
+    }
+
+    private func stopRequestCounterPolling() {
+        requestCounterPollTask?.cancel()
+        requestCounterPollTask = nil
+    }
+
+    @MainActor
+    private func refreshTotalRequests() async {
+        guard let counter = resolver.resolve(RequestCounterService.self) else {
+            totalRequests = 0
+            return
+        }
+
+        let snap = await counter.snapshot()
+        totalRequests = snap.total
+    }
+
+    // MARK: - Dialogs count (Unified threads)
+
+    private func startDialogsCountObservationIfNeeded() {
+        guard scenePhase == .active else { return }
+        guard dialogsCountCancellable == nil else { return }
+
+        guard let observe = resolver.resolve(ObserveUnifiedThreadsUseCase.self) else {
+            totalDialogs = 0
+            return
+        }
+
+        dialogsCountCancellable = observe.execute()
+            .map { $0.count }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { count in
+                totalDialogs = count
+            }
+    }
+
+    private func stopDialogsCountObservation() {
+        dialogsCountCancellable?.cancel()
+        dialogsCountCancellable = nil
+    }
+
+    // MARK: - Model picker
+
+    func presentModelPicker() {
+        withAnimation(.easeOut(duration: 0.22)) {
+            isModelPickerPresented = true
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ImageModeHomeView+BottomComposer.swift
+////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////
+// FILE: ImageModeHomeView+BottomComposer.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+extension ImageModeHomeView {
+
+    var homeComposerBar: some View {
+        ZStack {
+            NavigationLink(
+                isActive: $isQuickChatActive,
+                destination: {
+                    OpenAIQuickStartChatView(
+                        vm: makeOpenAITextChatVM(reset: true),
+                        initialText: quickChatInitialText,   // ✅ payload отдельно
+                        send: quickPromptAutoSend
+                    )
+                    .id(quickChatNavToken)
+                },
+                label: { EmptyView() }
+            )
+            .hidden()
+
+            HStack(spacing: 8.scale) {
+
+                Button {
+                    isUnifiedHistoryPresented = true
+                } label: {
+                    Image(systemName: "line.3.horizontal")
+                        .font(Tokens.Font.semibold18)
+                        .foregroundStyle(Color.white)
+                        .frame(width: 28.scale, height: 28.scale)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 16.scale)
+
+                // ✅ Bottom composer теперь работает ТОЛЬКО с composerText
+                TextField(
+                    "",
+                    text: $composerText,
+                    prompt: Text("home.quick_prompt.placeholder".localizable)
+                        .foregroundStyle(Color.white.opacity(0.52))
+                )
+                .textFieldStyle(.plain)
+                .foregroundStyle(Color.white)
+                .font(Tokens.Font.regular15)
+                .submitLabel(.send)
+                .onSubmit { sendQuickPromptIfPossible() }
+                .padding(.vertical, 10.scale)
+
+                if isHomeRecordingSpeech {
+                    homeSpeechTimerPill
+                        .frame(width: 69.scale, height: 32.scale)
+                } else {
+                    Button { presentModelPicker() } label: {
+                        ModelPillButton(title: selectedModel.shortTitle)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    if hasComposerText {
+                        sendQuickPromptIfPossible()
+                    } else {
+                        Task { await toggleHomeSpeech() }
+                    }
+                } label: {
+                    ZStack {
+                        if hasComposerText {
+                            Circle()
+                                .fill(Color.white.opacity(0.18))
+                                .frame(width: 36.scale, height: 36.scale)
+
+                            Image(systemName: "paperplane.fill")
+                                .font(Tokens.Font.bold15)
+                                .foregroundStyle(Color.white)
+                                .offset(x: 1.scale, y: -1.scale)
+
+                        } else if isHomeRecordingSpeech {
+                            Circle()
+                                .fill(Color.white.opacity(0.18))
+                                .frame(width: 36.scale, height: 36.scale)
+
+                            Image(systemName: "stop.fill")
+                                .font(Tokens.Font.bold15)
+                                .foregroundStyle(Color.white)
+
+                        } else {
+                            Image(HomeAssets.speech)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 36.scale, height: 36.scale)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 14.scale)
+            }
+            .frame(height: 64.scale)
+            .background(
+                RoundedRectangle(cornerRadius: 32.scale, style: .continuous)
+                    .fill(Color.black.opacity(0.92))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 32.scale, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1.scale)
+            )
+        }
+        .onChange(of: isQuickChatActive) { isActive in
+            guard isActive == false else { return }
+
+            // ✅ При возврате назад:
+            // - payload чистим
+            // - автосенд сбрасываем
+            // composerText не трогаем (он не менялся быстрыми действиями)
+            quickChatInitialText = ""
+            quickPromptAutoSend = false
+        }
+        .onDisappear {
+            if isHomeRecordingSpeech { stopHomeSpeech() }
+        }
+    }
+
+    // MARK: - UI bits
+
+    private var homeSpeechTimerPill: some View {
+        Text(homeSpeechTimerText)
+            .font(Tokens.Font.semibold13)
+            .monospacedDigit()
+            .foregroundStyle(Color.white.opacity(0.92))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.12))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1.scale)
+            )
+    }
+
+    private var hasComposerText: Bool {
+        composerText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty == false
+    }
+
+    // MARK: - Speech (Home)
+
+    private func toggleHomeSpeech() async {
+        if isHomeRecordingSpeech {
+            stopHomeSpeech()
+            return
+        }
+
+        let service: SpeechToTextService = {
+            if let existing = homeSpeechService { return existing }
+            let resolved = resolver.resolve(SpeechToTextService.self)!
+            homeSpeechService = resolved
+            return resolved
+        }()
+
+        let status = await service.requestPermissions()
+        guard status == .authorized else {
+            #if DEBUG
+            print("🎙️ HOME: no permissions")
+            #endif
+            return
+        }
+
+        startHomeSpeech(using: service)
+    }
+
+    private func startHomeSpeech(using service: SpeechToTextService) {
+        isHomeRecordingSpeech = true
+        homeSpeechSeconds = 0
+        homeSpeechTimerText = formatMMSS(homeSpeechSeconds)
+        startHomeSpeechTimer()
+
+        service.start(
+            onPartial: { text in
+                Task { @MainActor in
+                    composerText = text       // ✅ пишем ТОЛЬКО в composer
+                }
+            },
+            onFinal: { text in
+                Task { @MainActor in
+                    composerText = text
+                    stopHomeSpeech()
+                }
+            },
+            onError: { error in
+                #if DEBUG
+                print("🎙️ HOME: speech error: \(error)")
+                #endif
+                Task { @MainActor in
+                    cancelHomeSpeech()
+                }
+            }
+        )
+
+        #if DEBUG
+        print("🎙️ HOME: speech START")
+        #endif
+    }
+
+    private func stopHomeSpeech() {
+        homeSpeechService?.stop()
+        isHomeRecordingSpeech = false
+        stopHomeSpeechTimer()
+
+        #if DEBUG
+        print("🎙️ HOME: speech STOP")
+        #endif
+    }
+
+    private func cancelHomeSpeech() {
+        homeSpeechService?.cancel()
+        isHomeRecordingSpeech = false
+        stopHomeSpeechTimer()
+
+        #if DEBUG
+        print("🎙️ HOME: speech CANCEL")
+        #endif
+    }
+
+    private func startHomeSpeechTimer() {
+        homeSpeechTimerTask?.cancel()
+        homeSpeechTimerTask = Task {
+            while !Task.isCancelled && isHomeRecordingSpeech {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard isHomeRecordingSpeech else { break }
+                await MainActor.run {
+                    homeSpeechSeconds += 1
+                    homeSpeechTimerText = formatMMSS(homeSpeechSeconds)
+                }
+            }
+        }
+    }
+
+    private func stopHomeSpeechTimer() {
+        homeSpeechTimerTask?.cancel()
+        homeSpeechTimerTask = nil
+        homeSpeechSeconds = 0
+        homeSpeechTimerText = "00:00"
+    }
+
+    private func formatMMSS(_ seconds: Int) -> String {
+        let m = seconds / 60
+        let s = seconds % 60
+        return String(format: "%02d:%02d", m, s)
+    }
+
+    // MARK: - Send prompt (navigate to new chat)
+
+    private func sendQuickPromptIfPossible() {
+        let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.isEmpty == false else { return }
+
+        if isHomeRecordingSpeech {
+            stopHomeSpeech()
+        }
+
+        // ✅ Bottom composer → автосенд
+        quickPromptAutoSend = true
+
+        // ✅ Передаём текст как payload
+        quickChatInitialText = text
+
+        // ✅ Очищаем композер ДО навигации
+        composerText = ""
+
+        quickChatNavToken = UUID()
+        isQuickChatActive = true
+    }
+}
+
+private struct ModelPillButton: View {
+
+    let title: String
+
+    private var accent: Color { Tokens.Color.accent }
+    private var fill: Color { accent.opacity(0.15) }
+
+    var body: some View {
+        HStack(spacing: 6.scale) {
+            Image(systemName: "sparkles")
+                .font(Tokens.Font.semibold13)
+                .foregroundStyle(accent)
+                .frame(width: 13.scale, height: 13.scale)
+
+            Text(title)
+                .font(Tokens.Font.semibold13)
+                .foregroundStyle(accent)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.horizontal, 10.scale)
+        .frame(height: 32.scale)
+        .frame(maxWidth: 80.scale)
+        .background(
+            Capsule(style: .continuous).fill(fill)
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(accent, lineWidth: 1.scale)
+        )
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ImageModeHomeView+Cards.swift
+////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////
+// FILE: ImageModeHomeView+Cards.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+extension ImageModeHomeView {
+
+    private var quickActionsTitle: some View {
+        Text("home.quick_actions.title".localizable)
+            .font(Tokens.Font.medium16)
+            .foregroundStyle(Color.black)
+    }
+
+    private func quickActionPill(title: String, assetIcon: String) -> some View {
+        HStack(spacing: 12.scale) {
+            Image(assetIcon)
+                .renderingMode(.original)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 20.scale, height: 20.scale)
+
+            Text(title)
+                .font(Tokens.Font.regular15)
+                .foregroundStyle(Color.black)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 20.scale)
+        .padding(.trailing, 16.scale)
+        .padding(.vertical, 12.scale)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(hex: "F2F2F2") ?? Color.black.opacity(0.06))
+        .overlay(
+            RoundedRectangle(cornerRadius: Tokens.Radius.pill, style: .continuous)
+                .stroke(Tokens.Color.accent.opacity(0.25), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.pill, style: .continuous))
+    }
+
+    // MARK: - Chat presets
+
+    private func openPrefilledChat(_ prompt: String) {
+        quickChatNavToken = UUID()
+
+        // ✅ Быстрые действия НЕ должны трогать bottom composer.
+        // Поэтому пишем в payload для QuickStart, а не в composerText.
+        quickChatInitialText = prompt
+
+        // ✅ Быстрые действия: только вставить, без автосенда
+        quickPromptAutoSend = false
+
+        isQuickChatActive = true
+    }
+
+    private var presetSummary: String {
+        "home.quick_actions.preset.summary".localizable
+    }
+
+    private var presetRewrite: String {
+        "home.quick_actions.preset.rewrite".localizable
+    }
+
+    private var presetTranslate: String {
+        "home.quick_actions.preset.translate".localizable
+    }
+
+    private var presetTasks: String {
+        "home.quick_actions.preset.tasks".localizable
+    }
+
+    private var presetBrainstorm: String {
+        "home.quick_actions.preset.brainstorm".localizable
+    }
+
+    // MARK: - Chat
+
+    var chatQuickActionsCard: some View {
+        VStack(alignment: .leading, spacing: 12.scale) {
+            quickActionsTitle
+
+            Button {
+                newChatNavToken = UUID()
+                isNewChatActive = true
+            } label: {
+                quickActionPill(
+                    title: "home.quick_actions.chat.new_chat".localizable,
+                    assetIcon: HomeAssets.actionNewChat
+                )
+            }
+            .buttonStyle(.plain)
+
+            Button { openPrefilledChat(presetSummary) } label: {
+                quickActionPill(
+                    title: "home.quick_actions.chat.summary".localizable,
+                    assetIcon: HomeAssets.actionChatSummary
+                )
+            }
+            .buttonStyle(.plain)
+
+            Button { openPrefilledChat(presetRewrite) } label: {
+                quickActionPill(
+                    title: "home.quick_actions.chat.rewrite".localizable,
+                    assetIcon: HomeAssets.actionChatRewrite
+                )
+            }
+            .buttonStyle(.plain)
+
+            Button { openPrefilledChat(presetTranslate) } label: {
+                quickActionPill(
+                    title: "home.quick_actions.chat.translate".localizable,
+                    assetIcon: HomeAssets.actionChatTranslate
+                )
+            }
+            .buttonStyle(.plain)
+
+            Button { openPrefilledChat(presetTasks) } label: {
+                quickActionPill(
+                    title: "home.quick_actions.chat.tasks".localizable,
+                    assetIcon: HomeAssets.actionChatTasks
+                )
+            }
+            .buttonStyle(.plain)
+
+            Button { openPrefilledChat(presetBrainstorm) } label: {
+                quickActionPill(
+                    title: "home.quick_actions.chat.brainstorm".localizable,
+                    assetIcon: HomeAssets.actionChatBrainstorm
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: - Image
+
+    var quickActionsCard: some View {
+        VStack(alignment: .leading, spacing: 12.scale) {
+            quickActionsTitle
+
+            NavigationLink {
+                PhotoEditChatView(vm: makePhotoEditVM())
+            } label: {
+                quickActionPill(
+                    title: "home.quick_actions.image.edit_photo".localizable,
+                    assetIcon: HomeAssets.actionPhotoEdit
+                )
+            }
+            .buttonStyle(.plain)
+
+            NavigationLink {
+                TextToImageChatView(vm: makeTextToImageVM())
+            } label: {
+                quickActionPill(
+                    title: "home.quick_actions.image.text_to_image".localizable,
+                    assetIcon: HomeAssets.actionTextToImage
+                )
+            }
+            .buttonStyle(.plain)
+
+            NavigationLink {
+                PhotoEnhanceChatView(vm: makePhotoEnhanceVM())
+            } label: {
+                quickActionPill(
+                    title: "home.quick_actions.image.enhance_photo".localizable,
+                    assetIcon: HomeAssets.actionEnhance
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: - Video
+
+    var videoQuickActionsCard: some View {
+        VStack(alignment: .leading, spacing: 12.scale) {
+            quickActionsTitle
+
+            NavigationLink {
+                TextToVideoChatView(vm: makeTextToVideoVM())
+            } label: {
+                quickActionPill(
+                    title: "home.quick_actions.video.text_to_video".localizable,
+                    assetIcon: HomeAssets.actionTextToVideo
+                )
+            }
+            .buttonStyle(.plain)
+
+            NavigationLink {
+                PhotoToVideoChatView(
+                    vm: makePhotoToVideoVM(),
+                    imageCache: makeImageCache()
+                )
+            } label: {
+                quickActionPill(
+                    title: "home.quick_actions.video.photo_to_video".localizable,
+                    assetIcon: HomeAssets.actionPhotoToVideo
+                )
+            }
+            .buttonStyle(.plain)
+
+            NavigationLink {
+                TwoPhotosToVideoChatView(vm: makeTwoPhotosToVideoVM())
+            } label: {
+                quickActionPill(
+                    title: "home.quick_actions.video.two_photos_to_video".localizable,
+                    assetIcon: HomeAssets.actionTwoPhotos
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ImageModeHomeView+Debug.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+
+extension ImageModeHomeView {
+
+    var debugCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Debug")
+                .font(.headline)
+
+            NavigationLink {
+                GenerationHistoryListView(
+                    vm: makeGenerationHistoryListVM(),
+                    destinationBuilder: { kind, threadId in
+                        switch kind {
+                        case .textToImage:
+                            return AnyView(TextToImageChatView(vm: makeTextToImageVM(threadId: threadId)))
+                        case .photoEdit:
+                            return AnyView(PhotoEditChatView(vm: makePhotoEditVM(threadId: threadId)))
+                        case .photoEnhance:
+                            return AnyView(PhotoEnhanceChatView(vm: makePhotoEnhanceVM(threadId: threadId)))
+                        case .textToVideo:
+                            return AnyView(TextToVideoChatView(vm: makeTextToVideoVM(threadId: threadId)))
+                        case .photoToVideo:
+                            return AnyView(
+                                PhotoToVideoChatView(
+                                    vm: makePhotoToVideoVM(threadId: threadId),
+                                    imageCache: makeImageCache()
+                                )
+                            )
+                        case .twoPhotosToVideo:
+                            return AnyView(TwoPhotosToVideoChatView(vm: makeTwoPhotosToVideoVM(threadId: threadId)))
+                        }
+                    }
+                )
+            } label: {
+                debugRow(title: "История генераций (debug)")
+            }
+
+            NavigationLink {
+                ChatHistoryListView(vm: makeChatHistoryListVM())
+            } label: {
+                debugRow(title: "История чатов (OpenAI-only, debug)")
+            }
+
+            NavigationLink {
+                HomeView(resolver: resolver)
+            } label: {
+                debugRow(title: "Debug: Txt2Img Test (старый HomeView)")
+            }
+
+            NavigationLink {
+                RequestCounterDebugView(vm: makeRequestCounterDebugVM())
+            } label: {
+                debugRow(title: "RequestCounter диагностика")
+            }
+        }
+        .padding(12)
+        .background(Color.black.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func debugRow(title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.body)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .foregroundStyle(.secondary)
+                .font(.footnote)
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.black.opacity(0.10), lineWidth: 1)
+        )
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ImageModeHomeView+Factories.swift
+////////////////////////////////////////////////////////////
+
+
+import Foundation
+import Swinject
+import SwiftUI
+
+extension ImageModeHomeView {
+
+    // MARK: - Factories (Chat)
+
+    func makeOpenAITextChatVM(reset: Bool) -> OpenAITextChatViewModel {
+        let vm = resolver.resolve(OpenAITextChatViewModel.self)!
+        if reset { vm.resetConversation() }
+        return vm
+    }
+
+    func makeChatHistoryListVM() -> ChatHistoryListViewModel {
+        resolver.resolve(ChatHistoryListViewModel.self)!
+    }
+
+    func makeUnifiedHistoryListVM() -> UnifiedHistoryListViewModel {
+        let observe = resolver.resolve(ObserveUnifiedThreadsUseCase.self)!
+        let delete = resolver.resolve(DeleteChatThreadUseCase.self)!
+        let rename = resolver.resolve(RenameChatThreadUseCase.self)!
+
+        let get = resolver.resolve(GetChatThreadUseCase.self)!
+        let upsert = resolver.resolve(UpsertChatThreadUseCase.self)!
+
+        let genRepo = resolver.resolve(GenerationHistoryRepository.self)!
+        let mediaCache = resolver.resolve(MediaCacheService.self)!
+
+        return UnifiedHistoryListViewModel(
+            observeUseCase: observe,
+            deleteChatThreadUseCase: delete,
+            renameChatThreadUseCase: rename,
+            getChatThreadUseCase: get,
+            upsertChatThreadUseCase: upsert,
+            genRepo: genRepo,
+            mediaCache: mediaCache
+        )
+    }
+
+    func makeNotificationsListVM() -> NotificationsListViewModel {
+        let center = resolver.resolve(InternalNotificationCenter.self)!
+        return NotificationsListViewModel(center: center)
+    }
+
+    // MARK: - Factories (Generation History)
+
+    func makeGenerationHistoryListVM() -> GenerationHistoryListViewModel {
+        let repo = resolver.resolve(GenerationHistoryRepository.self)!
+        let mediaCache = resolver.resolve(MediaCacheService.self)!
+
+        return GenerationHistoryListViewModel(
+            repo: repo,
+            mediaCache: mediaCache
+        )
+    }
+
+    // MARK: - MediaCache
+
+    func resolveMediaCache() -> MediaCacheService {
+        resolver.resolve(MediaCacheService.self)!
+    }
+
+    // MARK: - ImageCache
+
+    func makeImageCache() -> ImageCache {
+        resolver.resolve(ImageCache.self)!
+    }
+
+
+    func makeRequestCounterDebugVM() -> RequestCounterDebugViewModel {
+        let counter = resolver.resolve(RequestCounterService.self)!
+        return RequestCounterDebugViewModel(counter: counter)
+    }
+
+    // MARK: - Factories (Image)
+
+    func makeTextToImageVM() -> TextToImageChatViewModel {
+        makeTextToImageVM(threadId: nil)
+    }
+
+    func makeTextToImageVM(threadId: UUID?) -> TextToImageChatViewModel {
+        resolver.resolve(TextToImageChatViewModel.self, argument: threadId)!
+    }
+
+    func makePhotoEnhanceVM() -> PhotoEnhanceChatViewModel {
+        makePhotoEnhanceVM(threadId: nil)
+    }
+
+    func makePhotoEnhanceVM(threadId: UUID?) -> PhotoEnhanceChatViewModel {
+        resolver.resolve(PhotoEnhanceChatViewModel.self, argument: threadId)!
+    }
+
+    func makePhotoEditVM() -> PhotoEditChatViewModel {
+        makePhotoEditVM(threadId: nil)
+    }
+
+    func makePhotoEditVM(threadId: UUID?) -> PhotoEditChatViewModel {
+        resolver.resolve(PhotoEditChatViewModel.self, argument: threadId)!
+    }
+
+    // MARK: - Factories (Video)
+
+    func makeTextToVideoVM() -> TextToVideoChatViewModel {
+        makeTextToVideoVM(threadId: nil)
+    }
+
+    func makeTextToVideoVM(threadId: UUID?) -> TextToVideoChatViewModel {
+        resolver.resolve(TextToVideoChatViewModel.self, argument: threadId)!
+    }
+
+    func makePhotoToVideoVM() -> PhotoToVideoChatViewModel {
+        makePhotoToVideoVM(threadId: nil)
+    }
+
+    func makePhotoToVideoVM(threadId: UUID?) -> PhotoToVideoChatViewModel {
+        resolver.resolve(PhotoToVideoChatViewModel.self, argument: threadId)!
+    }
+
+    func makeTwoPhotosToVideoVM() -> TwoPhotosToVideoChatViewModel {
+        makeTwoPhotosToVideoVM(threadId: nil)
+    }
+
+    func makeTwoPhotosToVideoVM(threadId: UUID?) -> TwoPhotosToVideoChatViewModel {
+        resolver.resolve(TwoPhotosToVideoChatViewModel.self, argument: threadId)!
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ImageModeHomeView+UI.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+extension ImageModeHomeView {
+    
+    enum HomeAssets {
+        static let auto = "QuickStart.mode"
+        static let speech = "mic"
+        static let headerAvatar = "ic_home_chad_avatar_40"
+        static let notification = "ic_home_notification_40"
+        static let statRequests = "ic_home_stat_requests"
+        static let statDialogs = "ic_home_stat_dialogs"
+        static let statPlan = "ic_home_stat_plan"
+        static let modeChat = "ic_home_mode_chat_42"
+        static let modeImage = "ic_home_mode_image_42"
+        static let modeVideo = "ic_home_mode_video_42"
+        static let actionNewChat = "ic_home_action_new_chat_20"
+        static let actionPhotoEdit = "ic_home_action_photo_edit_20"
+        static let actionTextToImage = "ic_home_action_text_to_image_20"
+        static let actionEnhance = "ic_home_action_enhance_20"
+        static let actionTextToVideo = "ic_home_action_text_to_video_20"
+        static let actionPhotoToVideo = "ic_home_action_photo_to_video_20"
+        static let actionTwoPhotos = "ic_home_action_two_photos_20"
+        static let actionChatSummary = "ic_home_action_chat_summary_20"
+        static let actionChatRewrite = "ic_home_action_chat_rewrite_20"
+        static let actionChatTranslate = "ic_home_action_chat_translate_20"
+        static let actionChatTasks = "ic_home_action_chat_tasks_20"
+        static let actionChatBrainstorm = "ic_home_action_chat_brainstorm_20"
+    }
+    
+    var darkBG: Color { Color(hex: "141414") ?? Color.black }
+    var lightBG: Color { Color(hex: "FAFAF5") ?? Color.white }
+    var fieldBG: Color { Color(hex: "F2F2F2") ?? Color.black.opacity(0.06) }
+    
+    private var lightTopRadius: CGFloat { 32.scale }
+    private var cardRadius: CGFloat { 18.scale }
+    
+    var darkHeaderSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+                .padding(.horizontal, Tokens.Spacing.x16)
+                .padding(.top, 72.scale)
+            
+            statsRow
+                .padding(.horizontal, Tokens.Spacing.x16)
+                .padding(.top, 24.5.scale)
+                .padding(.bottom, 22.scale)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(darkBG)
+    }
+    
+    var lightContentSection: some View {
+        ZStack(alignment: .topLeading) {
+            lightBG
+            
+            VStack(alignment: .leading, spacing: 0) {
+                modePicker
+                    .padding(.top, 18.scale)
+                
+                if mode == .image {
+                    quickActionsCard
+                        .padding(.top, 18.scale)
+                } else if mode == .video {
+                    videoQuickActionsCard
+                        .padding(.top, 18.scale)
+                } else if mode == .chat {
+                    chatQuickActionsCard
+                        .padding(.top, 18.scale)
+                } else {
+                    comingSoonCard
+                        .padding(.top, 18.scale)
+                }
+                
+#if DEBUG
+               // debugCard
+                // debug-only UI stays untouched (no localization needed)
+#endif
+                
+                Spacer(minLength: 220.scale)
+            }
+            .padding(.horizontal, Tokens.Spacing.x16)
+            .padding(.bottom, 0.scale)
+        }
+        .clipShape(RoundedCorner(radius: lightTopRadius, corners: [.topLeft, .topRight]))
+    }
+    
+    var header: some View {
+        HStack(alignment: .center, spacing: Tokens.Spacing.x12) {
+            Image(HomeAssets.headerAvatar)
+                .renderingMode(.original)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 40.scale, height: 40.scale)
+                .clipShape(Circle())
+            
+            VStack(alignment: .leading, spacing: 6.scale) {
+                Text("home.header.title".localizable)
+                    .font(Tokens.Font.semibold16)
+                    .foregroundStyle(Color.white)
+                
+                Text("home.header.subtitle".localizable)
+                    .font(Tokens.Font.regular13)
+                    .foregroundStyle(Tokens.Color.accent.opacity(0.70))
+            }
+            
+            Spacer(minLength: 0)
+            
+            Button {
+#if DEBUG
+                print("🔔 HOME: notification tapped")
+#endif
+                onNotificationsTap()
+            } label: {
+                ZStack(alignment: .topTrailing) {
+                    Image(HomeAssets.notification)
+                        .renderingMode(.original)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 40.scale, height: 40.scale)
+                    
+                    if hasUnreadNotifications {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 10.scale, height: 10.scale)
+                            .offset(x: -2.scale, y: 2.scale)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .frame(width: 40.scale, height: 40.scale)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+    
+    var statsRow: some View {
+        HStack(spacing: Tokens.Spacing.x12) {
+            statCard(icon: HomeAssets.statRequests, title: "home.stats.requests".localizable, value: "\(totalRequests)")
+            statCard(icon: HomeAssets.statDialogs, title: "home.stats.dialogs".localizable, value: "\(totalDialogs)")
+            statCard(
+              icon: HomeAssets.statPlan,
+              title: "home.stats.plan".localizable,
+              value: purchaseManager.isSubscribed
+                ? "home.stats.plan.pro".localizable
+                : "home.stats.plan.free".localizable
+            )
+
+        }
+    }
+    
+    func statCard(icon: String, title: String, value: String) -> some View {
+        VStack(alignment: .center, spacing: 10.scale) {
+            Image(icon)
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 40.scale, height: 40.scale)
+                .foregroundStyle(Tokens.Color.accent)
+            
+            Text(value)
+                .font(Tokens.Font.semibold20)
+                .foregroundStyle(Color.white)
+                .lineLimit(1)
+            
+            Text(title)
+                .font(Tokens.Font.regular13)
+                .foregroundStyle(Color.white.opacity(0.80))
+                .lineLimit(1)
+        }
+        .padding(16.scale)
+        .frame(maxWidth: .infinity, minHeight: 140.scale, maxHeight: 140.scale, alignment: .center)
+        .background(Color.clear)
+        .overlay(
+            RoundedRectangle(cornerRadius: cardRadius, style: .continuous)
+                .stroke(Tokens.Color.accent.opacity(0.25), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+    }
+    
+    var modePicker: some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.x12) {
+            Text("home.mode_picker.title".localizable)
+                .font(Tokens.Font.medium16)
+                .foregroundStyle(Color.black)
+            
+            HStack(spacing: Tokens.Spacing.x12) {
+                modeButton(.chat, icon: HomeAssets.modeChat)
+                modeButton(.image, icon: HomeAssets.modeImage)
+                modeButton(.video, icon: HomeAssets.modeVideo)
+            }
+        }
+    }
+    
+    func modeButton(_ item: HomeMode, icon: String) -> some View {
+        let isSelected = (mode == item)
+        
+        return Button {
+            mode = item
+        } label: {
+            VStack(spacing: 10.scale) {
+                Image(icon)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 77.scale, height: 42.scale)
+                    .foregroundStyle(isSelected ? Tokens.Color.accent : Color.black)
+                
+                Text(item.rawValue)
+                    .font(Tokens.Font.regular15)
+                    .foregroundStyle(isSelected ? Tokens.Color.accent : Color.black)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14.scale)
+            .background(
+                RoundedRectangle(cornerRadius: 18.scale, style: .continuous)
+                    .fill(isSelected ? fieldBG : Tokens.Color.accent.opacity(0.15))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18.scale, style: .continuous)
+                    .stroke(isSelected ? Tokens.Color.accent : Color.clear, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 18.scale, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+    
+    var comingSoonCard: some View {
+        VStack(alignment: .leading, spacing: 8.scale) {
+            Text("home.coming_soon.title".localizable)
+                .font(Tokens.Font.medium16)
+                .foregroundStyle(Color.black)
+            
+            Text("home.coming_soon.subtitle".localizable)
+                .font(Tokens.Font.regular13)
+                .foregroundStyle(Color.black.opacity(0.55))
+        }
+        .padding(16.scale)
+        .background(fieldBG)
+        .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.medium, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Tokens.Radius.medium, style: .continuous)
+                .stroke(Tokens.Color.accent.opacity(0.25), lineWidth: 1)
+        )
+    }
+}
+
+private struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: UIRectCorner = .allCorners
+    
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(
+            roundedRect: rect,
+            byRoundingCorners: corners,
+            cornerRadii: CGSize(width: radius, height: radius)
+        )
+        return Path(path.cgPath)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ModelPickerView.swift
+////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////
+// FILE: ModelPickerView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+// MARK: - Model definition (fake list)
+
+struct NeuralModelOption: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let subtitle: String?
+    let memory: String?
+    let iconKind: IconKind
+    let badgeAssetName: String
+    let showsSparkleNearTitle: Bool
+    let requiresPremium: Bool
+
+    enum IconKind: Hashable {
+        case sparkle
+        case robot
+        case bolt
+        case globe
+    }
+
+    var shortTitle: String {
+        if id == NeuralModelOption.automatic.id { return "model_picker.auto_short".localizable }
+        return title
+    }
+
+    static let automatic = NeuralModelOption(
+        id: "automatic",
+        title: "model_picker.automatic.title".localizable,
+        subtitle: "model_picker.automatic.subtitle".localizable,
+        memory: "model_picker.automatic.memory".localizable,
+        iconKind: .sparkle,
+        badgeAssetName: ModelPickerAssets.badgeX1,
+        showsSparkleNearTitle: true,
+        requiresPremium: false
+    )
+
+    static let all: [NeuralModelOption] = [
+        .automatic,
+        NeuralModelOption(
+            id: "haiku45",
+            title: "Haiku 4.5",
+            subtitle: "model_picker.haiku45.subtitle".localizable,
+            memory: nil,
+            iconKind: .robot,
+            badgeAssetName: ModelPickerAssets.badgeX2,
+            showsSparkleNearTitle: false,
+            requiresPremium: true
+        ),
+        NeuralModelOption(
+            id: "sonnet45",
+            title: "Sonnet 4.5",
+            subtitle: "model_picker.sonnet45.subtitle".localizable,
+            memory: nil,
+            iconKind: .bolt,
+            badgeAssetName: ModelPickerAssets.badgeX4,
+            showsSparkleNearTitle: false,
+            requiresPremium: true
+        ),
+        NeuralModelOption(
+            id: "sonnet4",
+            title: "Sonnet 4",
+            subtitle: nil,
+            memory: nil,
+            iconKind: .globe,
+            badgeAssetName: ModelPickerAssets.badgeX6,
+            showsSparkleNearTitle: false,
+            requiresPremium: true
+        ),
+        NeuralModelOption(
+            id: "opus45",
+            title: "Opus 4.5",
+            subtitle: nil,
+            memory: nil,
+            iconKind: .globe,
+            badgeAssetName: ModelPickerAssets.badgeX6,
+            showsSparkleNearTitle: false,
+            requiresPremium: true
+        ),
+        NeuralModelOption(
+            id: "opus41",
+            title: "Opus 4.1",
+            subtitle: nil,
+            memory: nil,
+            iconKind: .globe,
+            badgeAssetName: ModelPickerAssets.badgeX6,
+            showsSparkleNearTitle: false,
+            requiresPremium: true
+        ),
+        NeuralModelOption(
+            id: "opus4",
+            title: "Opus 4",
+            subtitle: nil,
+            memory: nil,
+            iconKind: .globe,
+            badgeAssetName: ModelPickerAssets.badgeX6,
+            showsSparkleNearTitle: false,
+            requiresPremium: true
+        ),
+        NeuralModelOption(
+            id: "opus3",
+            title: "Opus 3",
+            subtitle: nil,
+            memory: nil,
+            iconKind: .globe,
+            badgeAssetName: ModelPickerAssets.badgeX6,
+            showsSparkleNearTitle: false,
+            requiresPremium: true
+        ),
+        NeuralModelOption(
+            id: "haiku35",
+            title: "Haiku 3.5",
+            subtitle: nil,
+            memory: nil,
+            iconKind: .globe,
+            badgeAssetName: ModelPickerAssets.badgeX6,
+            showsSparkleNearTitle: false,
+            requiresPremium: true
+        ),
+        NeuralModelOption(
+            id: "sonnet35",
+            title: "Sonnet 3.5",
+            subtitle: nil,
+            memory: nil,
+            iconKind: .globe,
+            badgeAssetName: ModelPickerAssets.badgeX6,
+            showsSparkleNearTitle: false,
+            requiresPremium: true
+        ),
+        NeuralModelOption(
+            id: "opus35",
+            title: "Opus 3.5",
+            subtitle: nil,
+            memory: nil,
+            iconKind: .globe,
+            badgeAssetName: ModelPickerAssets.badgeX6,
+            showsSparkleNearTitle: false,
+            requiresPremium: true
+        )
+    ]
+}
+
+enum ModelPickerAssets {
+    static let close = "ic_close_40"
+    static let badgeX1 = "ic_badge_x1_36x27"
+    static let badgeX2 = "ic_badge_x2_36x27"
+    static let badgeX4 = "ic_badge_x4_36x27"
+    static let badgeX6 = "ic_badge_x6_36x27"
+}
+
+// MARK: - Overlay Sheet
+
+struct ModelPickerSheetOverlay: View {
+
+    @Binding var selected: NeuralModelOption
+    let isPremiumUser: Bool
+
+    // 🔥 ВАЖНО: теперь отдаём наружу КАКУЮ модель тапнули
+    let onRequestPremium: (NeuralModelOption) -> Void
+
+    let onClose: () -> Void
+
+    private let topInset: CGFloat = 0.scale
+    private let dismissThreshold: CGFloat = 60.scale
+
+    private var accent: Color { Tokens.Color.accent }
+    private var sheetBG: Color { Color(hex: "FAFAF5") ?? Color.white }
+    private var cellBG: Color { Color(hex: "CB704D")?.opacity(0.15) ?? Color.black.opacity(0.06) }
+
+    @GestureState private var dragY: CGFloat = 0
+    @State private var settledOffsetY: CGFloat = 0
+    @State private var isDismissing: Bool = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let currentY = max(0, settledOffsetY + dragY)
+
+            ZStack(alignment: .bottom) {
+
+                Color.black.opacity(0.45)
+                    .ignoresSafeArea()
+                    .onTapGesture { animateDismiss(height: geo.size.height) }
+
+                sheet
+                    .frame(maxWidth: .infinity)
+                    .frame(height: geo.size.height - topInset, alignment: .top)
+                    .background(sheetBG)
+                    .clipShape(TopRoundedCorner(radius: 24.scale))
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .padding(.top, topInset)
+                    .ignoresSafeArea(edges: .bottom)
+                    .offset(y: currentY)
+                    .gesture(
+                        DragGesture(minimumDistance: 8, coordinateSpace: .global)
+                            .updating($dragY) { value, state, _ in
+                                if value.translation.height > 0, !isDismissing {
+                                    state = value.translation.height
+                                }
+                            }
+                            .onEnded { value in
+                                guard !isDismissing else { return }
+
+                                let dy = value.translation.height
+                                if dy > dismissThreshold {
+                                    settledOffsetY = max(0, dy)
+                                    animateDismiss(height: geo.size.height)
+                                } else {
+                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.92)) {
+                                        settledOffsetY = 0
+                                    }
+                                }
+                            }
+                    )
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    private func animateDismiss(height: CGFloat) {
+        guard !isDismissing else { return }
+        isDismissing = true
+
+        withAnimation(.easeOut(duration: 0.22)) {
+            settledOffsetY = height + 40.scale
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+            onClose()
+            settledOffsetY = 0
+            isDismissing = false
+        }
+    }
+
+    private var sheet: some View {
+        VStack(spacing: 0) {
+            header
+                .frame(height: 62.scale)
+
+            Rectangle()
+                .fill(Color.black.opacity(0.20))
+                .frame(height: 1)
+
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 12.scale) {
+                    Color.clear.frame(height: 12.scale)
+
+                    ForEach(NeuralModelOption.all) { option in
+                        let isLocked = option.requiresPremium && !isPremiumUser
+
+                        Button {
+                            if isLocked {
+                                // ✅ НЕ закрываем пикер — просто просим премиум поверх
+                                onRequestPremium(option)
+                            } else {
+                                selected = option
+                            }
+                        } label: {
+                            ModelPickerRow(
+                                option: option,
+                                isSelected: option.id == selected.id,
+                                isLocked: isLocked,
+                                accent: accent,
+                                cellBG: cellBG
+                            )
+                        }
+                        .buttonStyle(NoHighlightButtonStyle())
+                    }
+
+                    Color.clear.frame(height: 0)
+                }
+                .padding(.horizontal, 16.scale)
+                .padding(.bottom, 0)
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            Text("model_picker.title".localizable)
+                .font(Tokens.Font.medium14)
+                .foregroundStyle(Color.black)
+                .padding(.leading, 24.scale)
+
+            Spacer(minLength: 0)
+
+            Button { onClose() } label: {
+                Image(ModelPickerAssets.close)
+                    .renderingMode(.original)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 40.scale, height: 40.scale)
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 16.scale)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.clear)
+    }
+}
+
+// MARK: - Row
+
+private struct ModelPickerRow: View {
+
+    let option: NeuralModelOption
+    let isSelected: Bool
+    let isLocked: Bool
+    let accent: Color
+    let cellBG: Color
+
+    private let cellRadius: CGFloat = 20
+
+    private var hasDetails: Bool {
+        let s = option.subtitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let m = option.memory?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return s.isEmpty == false || m.isEmpty == false
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if hasDetails {
+                    contentTopAligned
+                } else {
+                    contentCenterAligned
+                }
+            }
+            .padding(.vertical, 16.scale)
+            .padding(.leading, 16.scale)
+            .padding(.trailing, 16.scale)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: cellRadius.scale, style: .continuous)
+                    .fill(cellBG)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cellRadius.scale, style: .continuous)
+                    .stroke(isSelected ? accent : Color.clear, lineWidth: 2.scale)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: cellRadius.scale, style: .continuous))
+            .opacity(isLocked ? 0.55 : 1.0)
+
+            if isLocked {
+                proLockBadge
+                    .padding(.top, 12.scale)
+                    .padding(.trailing, 12.scale)
+                    .scaleEffect(0.9)
+            }
+        }
+    }
+
+    private var contentTopAligned: some View {
+        HStack(alignment: .top, spacing: 16.scale) {
+
+            icon
+                .frame(width: 48.scale, height: 48.scale)
+
+            VStack(alignment: .leading, spacing: 5.scale) {
+
+                HStack(spacing: 8.scale) {
+                    Text(option.title)
+                        .font(Tokens.Font.regular16)
+                        .foregroundStyle(Color.black)
+                        .lineLimit(1)
+
+                    if option.showsSparkleNearTitle {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 16.scale, weight: .semibold))
+                            .foregroundStyle(accent)
+                            .frame(width: 16.scale, height: 16.scale)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+
+                if let subtitle = option.subtitle, subtitle.isEmpty == false {
+                    Text(subtitle)
+                        .font(Tokens.Font.regular15)
+                        .foregroundStyle(Color.black.opacity(0.50))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let memory = option.memory, memory.isEmpty == false {
+                    Text(memory)
+                        .font(Tokens.Font.regular13)
+                        .foregroundStyle(Color.black.opacity(0.70))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 1.scale)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            if !isLocked {
+                VStack(spacing: 0) {
+                    Image(option.badgeAssetName)
+                        .renderingMode(.original)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 36.scale, height: 27.scale)
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    private var contentCenterAligned: some View {
+        HStack(alignment: .center, spacing: 16.scale) {
+
+            icon
+                .frame(width: 48.scale, height: 48.scale)
+
+            Text(option.title)
+                .font(Tokens.Font.regular16)
+                .foregroundStyle(Color.black)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+
+            if !isLocked {
+                Image(option.badgeAssetName)
+                    .renderingMode(.original)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 36.scale, height: 27.scale)
+            }
+        }
+    }
+
+    private var icon: some View {
+        ZStack {
+            Circle().fill(Color.black.opacity(0.90))
+            
+            switch option.iconKind {
+            case .sparkle:
+                Image("sparkles")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 48.scale, height: 48.scale)
+                
+            case .robot:
+                Image("robot")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 48.scale, height: 48.scale)
+                
+            case .bolt:
+                Image("bolt.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 48.scale, height: 48.scale)
+                
+            case .globe:
+                Image("globe")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 48.scale, height: 48.scale)
+                
+            }
+        }
+        .shadow(color: Color.black.opacity(0.18), radius: 10.scale, x: 0, y: 6.scale)
+    }
+
+    private var proLockBadge: some View {
+        HStack(spacing: 6.scale) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 12.scale, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.92))
+
+            Text("PRO")
+                .font(.system(size: 12.scale, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.92))
+        }
+        .padding(.horizontal, 10.scale)
+        .frame(height: 26.scale)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.78))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1.scale)
+        )
+    }
+}
+
+// MARK: - Shapes
+
+private struct TopRoundedCorner: Shape {
+    let radius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(
+            roundedRect: rect,
+            byRoundingCorners: [.topLeft, .topRight],
+            cornerRadii: CGSize(width: radius, height: radius)
+        )
+        return Path(path.cgPath)
+    }
+}
+
+// MARK: - No highlight button style
+
+private struct NoHighlightButtonStyle: PrimitiveButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .onTapGesture {
+                configuration.trigger()
+            }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: OpenAIQuickStartChatView.swift
+////////////////////////////////////////////////////////////
+
+// FILE: OpenAIQuickStartChatView.swift
+
+import SwiftUI
+
+struct OpenAIQuickStartChatView: View {
+
+    @EnvironmentObject private var purchaseManager: PurchaseManager
+
+    @StateObject private var vm: OpenAITextChatViewModel
+    private let initialText: String
+    private let send: Bool
+
+    @State private var didAutoSend: Bool = false
+
+    init(vm: OpenAITextChatViewModel, initialText: String, send: Bool = false ) {
+        _vm = StateObject(wrappedValue: vm)
+        self.initialText = initialText
+        self.send = send
+    }
+
+    var body: some View {
+        OpenAITextChatView(vm: vm)
+            .task {
+                guard didAutoSend == false else { return }
+                didAutoSend = true
+
+                let text = initialText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard text.isEmpty == false else { return }
+
+                vm.resetConversation()
+                vm.inputText = text
+                if send {
+                    vm.send()
+                }
+            }
+            .onChange(of: vm.didHitDailyLimit) { hit in
+                guard hit else { return }
+                purchaseManager.isShowedPaywall = true
+            }
+    }
+}
+
+

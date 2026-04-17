@@ -1,0 +1,738 @@
+////////////////////////////////////////////////////////////
+// FILE: APIPaywallAssets.swift
+////////////////////////////////////////////////////////////
+
+
+import Foundation
+
+enum APIPaywallAssets {
+
+    static let xmark = "PaywallXMark"
+
+    static let bgEn = "Paywall.FullBackgroundEn"
+    static let bgRu = "Paywall.FullBackgroundRu"
+
+    static let topWeekEn = "Paywall.weekEn"
+    static let topYearlyEn = "Paywall.yearlyEn"
+    static let topWeekRu = "Paywall.weekRu"
+    static let topYearlyRu = "Paywall.yearlyRu"
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIPaywallBackgroundView.swift
+////////////////////////////////////////////////////////////
+
+
+
+
+import SwiftUI
+
+struct APIPaywallBackgroundView: View {
+
+    let isEnglishUI: Bool
+
+    var body: some View {
+        ZStack {
+            Color.black
+
+            Image(isEnglishUI ? APIPaywallAssets.bgEn : APIPaywallAssets.bgRu)
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity)
+                .clipped()
+
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.0),
+                    Color.black.opacity(0.10),
+                    Color.black.opacity(0.20)
+                ],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIPaywallBottomCardView.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+
+struct APIPaywallBottomCardView: View {
+
+    let titleText: String
+    let cancelText: String
+    let continueText: String
+
+    let isEnglishUI: Bool
+
+    let products: [PaymentProduct]
+    @Binding var pickedProductID: String?
+
+    let isLoading: Bool
+    let onContinue: () -> Void
+
+    let bottomSafeInset: CGFloat
+
+    let termsURL: URL?
+    let privacyURL: URL?
+    let openURL: OpenURLAction
+    let onRestore: (() -> Void)?
+
+    var body: some View {
+        VStack(spacing: 0) {
+
+            Text(titleText)
+                .font(Tokens.Font.bold22)
+                .foregroundStyle(Tokens.Color.textHead)
+                .padding(.top, 18.scale)
+
+            productsBlock
+                .padding(.top, APIPaywallLayout.titleToProducts)
+
+            Text(cancelText)
+                .font(Tokens.Font.regular16)
+                .foregroundStyle(Tokens.Color.textSecondary)
+                .padding(.top, APIPaywallLayout.productsToCancel)
+
+            APIPaywallContinueButton(
+                title: continueText,
+                isEnabled: pickedProductID != nil && !isLoading,
+                onTap: onContinue
+            )
+            .padding(.top, APIPaywallLayout.cancelToContinue)
+
+            APIPaywallFooterLinksView(
+                isEnglishUI: isEnglishUI,
+                termsURL: termsURL,
+                privacyURL: privacyURL,
+                openURL: openURL,
+                onRestore: onRestore
+            )
+            .padding(.top, APIPaywallLayout.continueToFooter)
+
+            Spacer()
+                .frame(height: DeviceLayout.isSmallStatusBarPhone || DeviceLayout.isUnknown
+                       ? bottomSafeInset + APIPaywallLayout.bottomSafeExtra
+                       : 40.scale)
+        }
+        .padding(.horizontal, APIPaywallLayout.cardHorizontalInset)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(
+                cornerRadius: APIPaywallLayout.bottomCardCorner,
+                style: .continuous
+            )
+            .fill(Tokens.Color.componentsBackground)
+        )
+    }
+
+    @ViewBuilder
+    private var productsBlock: some View {
+        if products.count <= 3 {
+            APIPaywallProductsListView(
+                products: products,
+                pickedProductID: $pickedProductID,
+                isLoading: isLoading,
+                isEnglishUI: isEnglishUI
+            )
+        } else {
+            ScrollView(showsIndicators: false) {
+                APIPaywallProductsListView(
+                    products: products,
+                    pickedProductID: $pickedProductID,
+                    isLoading: isLoading,
+                    isEnglishUI: isEnglishUI
+                )
+            }
+            .frame(maxHeight: APIPaywallLayout.productsScrollMaxHeight)
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIPaywallCloseButton.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+import UIKit
+
+struct APIPaywallCloseButton: View {
+
+    let isDisabled: Bool
+    let isHidden: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            Group {
+                if UIImage(named: APIPaywallAssets.xmark) != nil {
+                    Image(APIPaywallAssets.xmark)
+                        .resizable()
+                        .renderingMode(.original)
+                        .scaledToFit()
+                } else {
+                    Image("Paywall.xmark")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 50.scale, height: 50.scale)      
+                }
+            }
+            .frame(width: APIPaywallLayout.closeSize, height: APIPaywallLayout.closeSize)
+            .contentShape(Rectangle())
+        }
+        .padding(.top, APIPaywallLayout.closeEdgeInset)
+        .padding(.trailing, 0.scale)
+        .disabled(isDisabled)
+        .opacity(isHidden ? 0.0 : 1.0)
+        .accessibilityLabel("Close")
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIPaywallContinueButton.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct APIPaywallContinueButton: View {
+
+    let title: String
+    let isEnabled: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button {
+            onTap()
+        } label: {
+            Text(title)
+                .font(Tokens.Font.semibold17)
+                .foregroundStyle(Tokens.Color.backgroundMain)
+                .frame(maxWidth: .infinity)
+                .frame(height: APIPaywallLayout.continueHeight) // ✅ 54
+                .background(
+                    RoundedRectangle(
+                        cornerRadius: Tokens.Radius.medium,
+                        style: .continuous
+                    )
+                    .fill(Tokens.Color.accent)
+                )
+        }
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1.0 : 0.55)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIPaywallFooterLinksView.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+
+struct APIPaywallFooterLinksView: View {
+
+    let isEnglishUI: Bool
+
+    let termsURL: URL?
+    let privacyURL: URL?
+
+    let openURL: OpenURLAction
+
+    let onRestore: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 8.scale) {
+
+            Button(isEnglishUI ? "Terms" : "Условия") {
+                guard let termsURL else { return }
+                openURL(termsURL)
+            }
+            .disabled(termsURL == nil)
+
+            dot
+
+            Button(isEnglishUI ? "Restore" : "Восстановить") {
+                onRestore?()
+            }
+            .disabled(onRestore == nil)
+
+            dot
+
+            Button(isEnglishUI ? "Privacy" : "Конфиденциальность") {
+                guard let privacyURL else { return }
+                openURL(privacyURL)
+            }
+            .disabled(privacyURL == nil)
+        }
+        .font(Tokens.Font.regular14)
+        .foregroundStyle(Tokens.Color.textSecondary)
+        .padding(.top, 6.scale)
+    }
+
+    private var dot: some View {
+        Text("•")
+            .foregroundStyle(Tokens.Color.textThirdcondary.opacity(0.6))
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIPaywallLayout.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+enum APIPaywallLayout {
+
+    // MARK: - Close button
+
+    static let closeSize: CGFloat = 50.scale
+
+    static let closeEdgeInset: CGFloat = 24
+
+    // MARK: - Top asset
+
+    static let topAssetHorizontalInset: CGFloat = 44.scale
+    static let topAssetGapFromClose: CGFloat = 49.scale
+
+    // MARK: - Bottom card (по ТВОИМ метрикам)
+
+    static let cardHorizontalInset: CGFloat = 16.scale
+
+    static let bottomCardCorner: CGFloat = 26.scale
+
+    static let productRowHeight: CGFloat = 65.scale
+
+    static let optionCorner: CGFloat = 18.scale
+
+    static let productsSpacing: CGFloat = 8.scale
+
+    static let titleToProducts: CGFloat = 16.scale
+
+    static let productsToCancel: CGFloat = 20.scale
+
+    static let cancelToContinue: CGFloat = 8.scale
+
+    static let continueHeight: CGFloat = 54.scale
+
+    static let continueToFooter: CGFloat = 4.scale
+
+    static let bottomSafeExtra: CGFloat = 10.scale
+
+    static let productsScrollMaxHeight: CGFloat =
+        (productRowHeight * 3) + (productsSpacing * 2)
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIPaywallLoadingOverlayView.swift
+////////////////////////////////////////////////////////////
+
+
+
+
+import SwiftUI
+
+struct APIPaywallLoadingOverlayView: View {
+    var body: some View {
+        ProgressView()
+            .tint(Color.white)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black.opacity(0.25))
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIPaywallProductRowView.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+
+struct APIPaywallProductRowView: View {
+
+    let product: PaymentProduct
+    let isPicked: Bool
+    let isEnglishUI: Bool
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(
+                cornerRadius: APIPaywallLayout.optionCorner,
+                style: .continuous
+            )
+            .fill(Tokens.Color.componentsBackground)
+            .overlay(
+                RoundedRectangle(
+                    cornerRadius: APIPaywallLayout.optionCorner,
+                    style: .continuous
+                )
+                .stroke(
+                    strokeColor,
+                    lineWidth: strokeLineWidth
+                )
+            )
+
+            HStack(spacing: 12.scale) {
+                VStack(alignment: .leading, spacing: 4.scale) {
+                    Text(product.name)
+                        .font(Tokens.Font.semibold17)
+                        .foregroundStyle(Tokens.Color.textPrimary)
+                        .lineLimit(1)
+
+                    if product.isSubscription,
+                       let interval = product.subscriptionInterval,
+                       let period = product.subscriptionPeriod {
+                        Text(subscriptionSubtitle(period: period, interval: interval))
+                            .font(Tokens.Font.regular13)
+                            .foregroundStyle(Tokens.Color.textSecondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 12.scale)
+
+                Text("\(product.price) ₽")
+                    .font(Tokens.Font.semibold17)
+                    .foregroundStyle(Tokens.Color.textPrimary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 16.scale)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: APIPaywallLayout.productRowHeight) // ✅ 65
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(
+            RoundedRectangle(
+                cornerRadius: APIPaywallLayout.optionCorner,
+                style: .continuous
+            )
+        )
+    }
+
+    // MARK: - Stroke styling (per spec)
+
+    private var strokeColor: Color {
+        if isPicked {
+            return Color(hex: "C87458") ?? Tokens.Color.accent
+        } else {
+            return Color.black.opacity(0.15)
+        }
+    }
+
+    private var strokeLineWidth: CGFloat {
+        if isPicked {
+            return 2.scale
+        } else {
+            return 1.scale
+        }
+    }
+
+    private func subscriptionSubtitle(period: Int, interval: String) -> String {
+        let unit = interval.lowercased()
+        return "\(period) \(unit)"
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIPaywallProductsListView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct APIPaywallProductsListView: View {
+
+    let products: [PaymentProduct]
+    @Binding var pickedProductID: String?
+
+    let isLoading: Bool
+    let isEnglishUI: Bool
+
+    var body: some View {
+        VStack(spacing: APIPaywallLayout.productsSpacing) { // ✅ 8
+            if products.isEmpty && isLoading {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(Color.gray)
+                    .scaleEffect(1.2)
+                    .padding(.vertical, 24.scale)
+            } else {
+                ForEach(products) { product in
+                    Button {
+                        pickedProductID = product.id
+                    } label: {
+                        APIPaywallProductRowView(
+                            product: product,
+                            isPicked: pickedProductID == product.id,
+                            isEnglishUI: isEnglishUI
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isLoading)
+                    .onAppear {
+                        if pickedProductID == nil {
+                            pickedProductID = product.id
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIPaywallTopContentView.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+
+struct APIPaywallTopContentView: View {
+
+    let assetName: String
+
+    var body: some View {
+        Image(assetName)
+            .resizable()
+            .scaledToFit()
+            .frame(maxWidth: .infinity, alignment: .center)
+            .accessibilityHidden(true)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIPaywallView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+import UIKit
+
+struct APIPaywallView: View {
+
+    @EnvironmentObject private var purchaseManager: PurchaseManager
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+
+    private let onClose: (() -> Void)?
+
+    @State private var products: [PaymentProduct] = []
+    @State private var pickedProductID: String?
+    @State private var isLoading: Bool = false
+    @State private var showPaymentHTML: Bool = false
+    @State private var paymentHTML: String?
+    @State private var showAlert: Bool = false
+    @State private var localError: String?
+
+    private var pickedProduct: PaymentProduct? {
+        products.first(where: { $0.id == pickedProductID })
+    }
+
+    init(onClose: (() -> Void)? = nil) {
+        self.onClose = onClose
+    }
+
+    private var isEnglishUI: Bool {
+        let lang = Locale.current.languageCode ?? "en"
+        return lang != "ru"
+    }
+
+    private var titleText: String {
+        isEnglishUI ? "Get full access" : "Получите полный доступ"
+    }
+
+    private var continueText: String {
+        isEnglishUI ? "Continue" : "Продолжить"
+    }
+
+    private var cancelText: String {
+        isEnglishUI ? "Cancel anytime" : "Отменить в любое время"
+    }
+
+    private var termsURL: URL? {
+        URL(string: "https://docs.google.com/document/d/1FsCLwpFngqIQgQ1e-0m6RkgO2lhKrSYG3BDdk7BsMzA/edit?usp=sharing")
+    }
+
+    private var privacyURL: URL? {
+        URL(string: "https://docs.google.com/document/d/1gO4kMiaVCuHeIjBC43qAzLfIatpo-5kpNE8Uov5QAzQ/edit?usp=sharing")
+    }
+
+    private var isYearlyPicked: Bool {
+        guard let p = pickedProduct else { return false }
+        let interval = (p.subscriptionInterval ?? "").lowercased()
+        if interval.contains("year") { return true }
+        if interval.contains("month"), (p.subscriptionPeriod ?? 0) >= 12 { return true }
+        return false
+    }
+
+    private var topContentAssetName: String {
+        if isEnglishUI {
+            return isYearlyPicked ? APIPaywallAssets.topYearlyEn : APIPaywallAssets.topWeekEn
+        } else {
+            return isYearlyPicked ? APIPaywallAssets.topYearlyRu : APIPaywallAssets.topWeekRu
+        }
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                APIPaywallBackgroundView(isEnglishUI: isEnglishUI)
+                    .offset(y: DeviceLayout.isSmallStatusBarPhone || DeviceLayout.isUnknown ? 0.scale  : -20.scale)
+
+                VStack(spacing: 0) {
+                    APIPaywallTopContentView(assetName: topContentAssetName)
+                        .padding(.top,
+                                 (DeviceLayout.isSmallStatusBarPhone || DeviceLayout.isUnknown )
+                                 ? APIPaywallLayout.closeEdgeInset + APIPaywallLayout.closeSize + APIPaywallLayout.topAssetGapFromClose + 70.scale
+                                 : APIPaywallLayout.closeEdgeInset + APIPaywallLayout.closeSize + APIPaywallLayout.topAssetGapFromClose
+                        )
+                        .padding(.horizontal, APIPaywallLayout.topAssetHorizontalInset)
+                        .scaleEffect((DeviceLayout.isSmallStatusBarPhone || DeviceLayout.isUnknown ) ? 0.8 : 1.0)
+
+                    Spacer(minLength: (DeviceLayout.isSmallStatusBarPhone || DeviceLayout.isUnknown ) ? 130.scale : 200.scale)
+
+                    APIPaywallBottomCardView(
+                        titleText: titleText,
+                        cancelText: cancelText,
+                        continueText: continueText,
+                        isEnglishUI: isEnglishUI,
+                        products: products,
+                        pickedProductID: $pickedProductID,
+                        isLoading: isLoading,
+                        onContinue: {
+                            guard let product = pickedProduct else { return }
+                            Task { await openPayment(for: product) }
+                        },
+                        bottomSafeInset: geo.safeAreaInsets.bottom,
+                        termsURL: termsURL,
+                        privacyURL: privacyURL,
+                        openURL: openURL,
+                        onRestore: {
+                            Task { await restoreTapped() }
+                        }
+                    )
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+            .offset(y: (DeviceLayout.isSmallStatusBarPhone || DeviceLayout.isUnknown ) ? -160.scale : 0.scale)
+            .offset(x: -3.scale)
+            .ignoresSafeArea()
+            .overlay(alignment: .topTrailing) {
+                APIPaywallCloseButton(
+                    isDisabled: isLoading,
+                    isHidden: isLoading,
+                    onTap: { close() }
+                )
+                .offset(y: (DeviceLayout.isSmallStatusBarPhone || DeviceLayout.isUnknown ) ? 0.scale : 20.scale)
+            }
+            .overlay {
+                if isLoading { APIPaywallLoadingOverlayView() }
+            }
+            .onAppear {
+                loadProductsIfNeeded()
+                if purchaseManager.purchaseError != nil || purchaseManager.failRestoreText != nil {
+                    showAlert = true
+                }
+            }
+            .onChange(of: purchaseManager.failRestoreText != nil) { _, newValue in
+                if newValue { showAlert = true }
+            }
+            .onChange(of: purchaseManager.isSubscribed) { _, newValue in
+                if newValue { close() }
+            }
+            .alert("Error", isPresented: $showAlert) {
+                Button("Ok", role: .cancel) {
+                    localError = nil
+                    purchaseManager.purchaseError = nil
+                    purchaseManager.failRestoreText = nil
+                }
+            } message: {
+                Text(localError ?? purchaseManager.purchaseError ?? purchaseManager.failRestoreText ?? "Unknown error")
+            }
+            .fullScreenCover(isPresented: $showPaymentHTML) {
+                if let html = paymentHTML {
+                    PaymentHTMLView(
+                        html: html,
+                        productType: .subscription,
+                        productId: pickedProduct?.id
+                    )
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: isLoading)
+        }
+        
+    }
+
+    private func loadProductsIfNeeded() {
+        guard products.isEmpty else { return }
+        isLoading = true
+
+        Task {
+            do {
+                let bundle = Bundle.main.bundleIdentifier ?? "com.tay.5034claude"
+                let all = try await APIPaymentManager.shared.fetchProducts(appBundle: bundle)
+                let subs = all.filter { $0.isSubscription }.sorted { $0.price < $1.price }
+                await MainActor.run {
+                    self.products = subs
+                    self.isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.localError = error.localizedDescription
+                    self.isLoading = false
+                    self.showAlert = true
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func restoreTapped() async {
+        isLoading = true
+        let ok = await purchaseManager.restoreRussianSubscription()
+        isLoading = false
+
+        if !ok {
+            showAlert = true
+        }
+    }
+
+    @MainActor
+    private func openPayment(for product: PaymentProduct) async {
+        isLoading = true
+        do {
+            let bundle = Bundle.main.bundleIdentifier ?? "com.tay.5034claude"
+            let html = try await APIPaymentManager.shared.fetchPaywallHTML(
+                userId: purchaseManager.userId,
+                appBundle: bundle,
+                productApphudId: product.apphudId
+            )
+            self.paymentHTML = html
+            self.isLoading = false
+            self.showPaymentHTML = true
+        } catch {
+            self.localError = error.localizedDescription
+            self.isLoading = false
+            self.showAlert = true
+        }
+    }
+
+    private func close() {
+        onClose?()
+        dismiss()
+    }
+}
+

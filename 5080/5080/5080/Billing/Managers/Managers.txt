@@ -1,0 +1,862 @@
+////////////////////////////////////////////////////////////
+// FILE: APIPaymentManager.swift
+////////////////////////////////////////////////////////////
+
+/// Менеджер для работы с кастомным API оплаты через веб-платежи
+///
+/// Используется для русских пользователей (isRus = true) вместо стандартных покупок через App Store.
+/// Предоставляет методы для:
+/// - Получения списка продуктов из API
+/// - Получения HTML страницы для оплаты через CloudPayments
+/// - Проверки статуса подписки пользователя
+/// - Получения транзакций пользователя для обработки покупок
+///
+/// В DEBUG режиме использует мок-данные из Resources/Mock/
+import ApphudSDK
+import Foundation
+
+class APIPaymentManager {
+    public static var shared = APIPaymentManager()
+
+    private let baseURL = "https://payment.webberapp.shop"
+    private var useMock: Bool
+
+    private init() {
+#if DEBUG
+        useMock = false
+#else
+        useMock = false
+#endif
+    }
+
+    // MARK: - Public API
+
+    /// Получение списка продуктов
+    func fetchProducts(appBundle: String) async throws -> [PaymentProduct] {
+        if useMock {
+            return try loadMockProducts()
+        }
+
+        var components = URLComponents(string: "\(baseURL)/product")
+        components?.queryItems = [
+            URLQueryItem(name: "app_bundle", value: appBundle)
+        ]
+
+        guard let url = components?.url else {
+            throw APIError.invalidURL
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        try validate(response: response, data: data)
+
+        return try JSONDecoder().decode([PaymentProduct].self, from: data)
+    }
+
+    /// Получение HTML страницы для оплаты
+    func fetchPaywallHTML(userId: String, appBundle: String, productApphudId: String) async throws -> String {
+        if useMock {
+            return try loadMockPayHTML()
+        }
+
+        var components = URLComponents(string: "\(baseURL)/web/paywall")
+        components?.queryItems = [
+            URLQueryItem(name: "user_id", value: userId),
+            URLQueryItem(name: "app_bundle", value: appBundle),
+            URLQueryItem(name: "product_apphud_id", value: productApphudId)
+        ]
+
+        guard let url = components?.url else {
+            throw APIError.invalidURL
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        try validate(response: response, data: data)
+
+        guard let html = String(data: data, encoding: .utf8) else {
+            throw APIError.decodingFailed
+        }
+
+        return html
+    }
+
+    /// Получение статуса подписки пользователя
+    func fetchSubscriptionStatus(userId: String) async throws -> SubscriptionStatus {
+        if useMock {
+            return try loadMockSubscription()
+        }
+
+        guard let url = URL(string: "\(baseURL)/transaction/\(userId)/subscription") else {
+            throw APIError.invalidURL
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        try validate(response: response, data: data)
+
+        return try JSONDecoder().decode(SubscriptionStatus.self, from: data)
+    }
+    
+    /// Получение транзакций пользователя
+    func fetchTransactions(userId: String) async throws -> [Transaction] {
+        guard let url = URL(string: "\(baseURL)/transaction/\(userId)") else {
+            throw APIError.invalidURL
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        try validate(response: response, data: data)
+
+        return try JSONDecoder().decode([Transaction].self, from: data)
+    }
+
+    // MARK: - Mocks
+
+    private func loadMockProducts() throws -> [PaymentProduct] {
+        let data = try loadMockData(resource: "products", withExtension: "json")
+        return try JSONDecoder().decode([PaymentProduct].self, from: data)
+    }
+
+    private func loadMockPayHTML() throws -> String {
+        let data = try loadMockData(resource: "payHTMLMock", withExtension: "txt")
+        guard let html = String(data: data, encoding: .utf8) else {
+            throw APIError.decodingFailed
+        }
+        return html
+    }
+
+    private func loadMockSubscription() throws -> SubscriptionStatus {
+        let data = try loadMockData(resource: "subscription", withExtension: "json")
+        return try JSONDecoder().decode(SubscriptionStatus.self, from: data)
+    }
+
+    private func loadMockData(resource: String, withExtension ext: String) throws -> Data {
+        guard let url = Bundle.main.url(forResource: resource, withExtension: ext) else {
+            throw APIError.mockNotFound("\(resource).\(ext)")
+        }
+        return try Data(contentsOf: url)
+    }
+
+    // MARK: - Helpers
+
+    private func validate(response: URLResponse, data: Data) throws {
+        guard let httpResponse = response as? HTTPURLResponse else { return }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw APIError.serverError(statusCode: httpResponse.statusCode, data: data)
+        }
+    }
+
+    enum APIError: Error {
+        case invalidURL
+        case serverError(statusCode: Int, data: Data)
+        case decodingFailed
+        case mockNotFound(String)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIPaymentModels.swift
+////////////////////////////////////////////////////////////
+
+/// Модели данных для кастомной оплаты через API
+///
+/// Содержит структуры для работы с API платежной системы:
+/// - PaymentProduct: модель продукта (подписки, токены, аватары)
+/// - SubscriptionStatus: статус подписки пользователя
+/// - Transaction: модель транзакции для отслеживания покупок
+/// - ProductType: enum для типизации продуктов (subscription, tokens, avatars)
+import Foundation
+
+// MARK: - Products
+
+struct PaymentProduct: Decodable, Identifiable {
+    let id: String
+    let apphudId: String
+    let name: String
+    let price: Int
+    let isSubscription: Bool
+    let subscriptionInterval: String?
+    let subscriptionPeriod: Int?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case apphudId = "apphud_id"
+        case name
+        case price
+        case isSubscription = "is_subscription"
+        case subscriptionInterval = "subscription_interval"
+        case subscriptionPeriod = "subscription_period"
+    }
+}
+
+// MARK: - Subscription
+
+struct SubscriptionStatus: Decodable {
+    let isActive: Bool
+    let isCancelled: Bool
+    
+    enum CodingKeys: String, CodingKey {
+        case isActive = "is_acitve"
+        case isCancelled = "is_cancelled"
+    }
+}
+
+// MARK: - Transaction
+
+struct Transaction: Decodable, Identifiable {
+    let id: String
+    let productId: String
+    let productName: String
+    let price: Int
+    let isSubscription: Bool
+    let createdAt: String
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case productId = "product_id"
+        case productName = "product_name"
+        case price
+        case isSubscription = "is_subscription"
+        case createdAt = "created_at"
+    }
+}
+
+enum ProductType {
+    case subscription
+    case tokens
+    case avatars
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: KeychainManager.swift
+////////////////////////////////////////////////////////////
+
+import Foundation
+import Security
+
+final class KeychainManager {
+    static let shared = KeychainManager()
+    
+    private let service: String
+    
+    private init() {
+        self.service = Bundle.main.bundleIdentifier ?? "com.paywallsdemo"
+    }
+    
+    
+    func save(_ value: String, forKey key: String) async -> Bool {
+        guard let data = value.data(using: .utf8) else {
+            return false
+        }
+        return await save(data, forKey: key)
+    }
+    
+    func save(_ value: Data, forKey key: String) async -> Bool {
+        delete(forKey: key)
+        
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: value,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        
+        let status = SecItemAdd(query as CFDictionary, nil)
+        return status == errSecSuccess
+    }
+    
+    func save(_ value: Int, forKey key: String) async -> Bool {
+        return await save(String(value), forKey: key)
+    }
+    
+    func save(_ value: Bool, forKey key: String) async -> Bool {
+        return await save(value ? "true" : "false", forKey: key)
+    }
+    
+    
+    func load(forKey key: String) -> String? {
+        guard let data = loadData(forKey: key) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+    
+    func loadData(forKey key: String) -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        
+        guard status == errSecSuccess,
+              let data = result as? Data else {
+            return nil
+        }
+        
+        return data
+    }
+    
+    func loadInt(forKey key: String) -> Int? {
+        guard let string = load(forKey: key) else {
+            return nil
+        }
+        return Int(string)
+    }
+    
+    func loadBool(forKey key: String) -> Bool? {
+        guard let string = load(forKey: key) else {
+            return nil
+        }
+        return string == "true"
+    }
+    
+    
+    @discardableResult
+    func delete(forKey key: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+        
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
+    
+    
+    @discardableResult
+    func clearAll() -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service
+        ]
+        
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
+    
+    
+    func exists(forKey key: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: false,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        
+        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        return status == errSecSuccess
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PurchaseManager.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+import Combine
+import ApphudSDK
+import AdServices
+import OSLog
+
+@MainActor
+final class PurchaseManager: ObservableObject {
+    
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "demo", category: "PurchaseManager")
+    
+    enum PurchaseState: Equatable {
+        case idle
+        case loading
+        case ready
+        case purchasing
+        case error(String)
+        
+        static func == (lhs: PurchaseState, rhs: PurchaseState) -> Bool {
+            switch (lhs, rhs) {
+            case (.idle, .idle), (.loading, .loading), (.ready, .ready), (.purchasing, .purchasing):
+                return true
+            case (.error(let lhsMsg), .error(let rhsMsg)):
+                return lhsMsg == rhsMsg
+            default:
+                return false
+            }
+        }
+    }
+    
+    @Published private(set) var paywall: ApphudPaywall?
+    @Published private(set) var paywallTokens: ApphudPaywall?
+    @Published private(set) var paywallAvatars: ApphudPaywall?
+    
+    @Published private(set) var products: [ApphudProduct] = []
+    @Published private(set) var tokenProducts: [ApphudProduct] = []
+    @Published private(set) var avatarsProducts: [ApphudProduct] = []
+    
+    @Published private(set) var isSubscribed: Bool = false
+    @Published private(set) var isRus: Bool = false
+    @Published private(set) var purchaseState: PurchaseState = .idle
+    @Published var purchaseError: String? = nil
+    @Published var isLoad: Bool = false
+    @Published var failRestoreText: String? = nil
+    
+    @AppStorage("OnBoardEnd") var isOnboardingFinished: Bool = false
+    @Published var isShowedPaywall: Bool = false
+    
+    @Published var tokens: Int = 0
+    @Published var avatars: Int = 0
+    
+    // MARK: - API subscription polling
+    private var subscriptionPollingTask: Task<Void, Never>?
+    private var paymentScreenClosedAt: Date?
+    
+    public var userId: String {
+#if DEBUG
+        Apphud.userID()
+#else
+        Apphud.userID()
+#endif
+    }
+    
+    var isReady: Bool {
+        purchaseState == .ready && !products.isEmpty && paywall != nil
+    }
+    
+    var isLoading: Bool {
+        purchaseState == .loading || purchaseState == .purchasing
+    }
+
+    static let shared = PurchaseManager()
+    
+    private init() {
+        logger.info("PurchaseManager: Initializing Apphud SDK")
+        Apphud.setPaywallsCacheTimeout(3600)
+        Apphud.start(apiKey: "app_MJp2QdcqMLP5XCgB8pAjZAhzAs2nva")
+        logger.info("PurchaseManager: Apphud.start() called")
+        
+        if let storedTokens = KeychainManager.shared.loadInt(forKey: "tokens") {
+            self.tokens = storedTokens
+            logger.info("PurchaseManager: Loaded tokens from Keychain: \(storedTokens)")
+        } else {
+            logger.info("PurchaseManager: No tokens value in Keychain, starting from 0")
+        }
+        
+        if let storedAvatars = KeychainManager.shared.loadInt(forKey: "avatars") {
+            self.avatars = storedAvatars
+            logger.info("PurchaseManager: Loaded avatars from Keychain: \(storedAvatars)")
+        } else {
+            logger.info("PurchaseManager: No avatars value in Keychain, starting from 0")
+        }
+        
+        purchaseState = .loading
+        
+        Task {
+            await loadPaywalls()
+        }
+        
+#if DEBUG
+        self.isSubscribed = true
+#else
+        // Базовое значение подписки берём из Apphud
+        self.isSubscribed = Apphud.hasPremiumAccess()
+        
+        // Дополнительно асинхронно проверяем подписку через кастомный API оплаты
+        Task {
+            await self.refreshSubscriptionFromAPI()
+        }
+#endif
+        
+#if DEBUG
+        Task {
+//            await self.isRus = isRussianUserFromApphud()
+            self.isRus = true
+        }
+#else
+        Task {
+            await self.isRus = isRussianUserFromApphud()
+        }
+#endif
+        isShowedPaywall = !isSubscribed && isOnboardingFinished
+    }
+    
+    private func loadPaywalls() async {
+        logger.info("PurchaseManager: Starting paywall fetch")
+        let paywalls = await Apphud.fetchPaywallsWithFallback()
+        logger.info("PurchaseManager: Fetched \(paywalls.count) paywalls")
+        self.configure(with: paywalls)
+    }
+
+    private func configure(with paywalls: [ApphudPaywall]) {
+        logger.info("PurchaseManager: Configuring paywalls, received \(paywalls.count) paywalls")
+        logger.info("PurchaseManager: Available paywall identifiers: \(paywalls.map { $0.identifier }.joined(separator: ", "))")
+        
+        if let main = paywalls.first(where: { $0.identifier == "main" }) ?? paywalls.first {
+            self.paywall = main
+            self.products = main.products
+            logger.info("PurchaseManager: Configured main paywall '\(main.identifier)' with \(main.products.count) products")
+            
+            if main.products.isEmpty {
+                logger.warning("PurchaseManager: Main paywall has no products!")
+            } else {
+                let productIds = main.products.map { $0.productId }.joined(separator: ", ")
+                logger.info("PurchaseManager: Main paywall products: \(productIds)")
+            }
+        } else {
+            logger.error("PurchaseManager: No main paywall found")
+            self.paywall = nil
+            self.products = []
+        }
+        
+        if let tokens = paywalls.first(where: { $0.identifier == "tokens" }) {
+            self.paywallTokens = tokens
+            self.tokenProducts = tokens.products
+            logger.info("PurchaseManager: Configured tokens paywall '\(tokens.identifier)' with \(tokens.products.count) products")
+            
+            if !tokens.products.isEmpty {
+                let productIds = tokens.products.map { $0.productId }.joined(separator: ", ")
+                logger.info("PurchaseManager: Tokens paywall products: \(productIds)")
+            }
+        } else {
+            logger.warning("PurchaseManager: Tokens paywall not found")
+            self.paywallTokens = nil
+            self.tokenProducts = []
+        }
+        
+        if let avatars = paywalls.first(where: { $0.identifier == "avatars" }) {
+            self.paywallAvatars = avatars
+            self.avatarsProducts = avatars.products
+            logger.info("PurchaseManager: Configured avatars paywall '\(avatars.identifier)' with \(avatars.products.count) products")
+            
+            if !avatars.products.isEmpty {
+                let productIds = avatars.products.map { $0.productId }.joined(separator: ", ")
+                logger.info("PurchaseManager: Avatars paywall products: \(productIds)")
+            }
+        } else {
+            logger.warning("PurchaseManager: Avatars paywall not found")
+            self.paywallAvatars = nil
+            self.avatarsProducts = []
+        }
+        
+        if self.paywall != nil && !self.products.isEmpty {
+            purchaseState = .ready
+            purchaseError = nil
+            logger.info("PurchaseManager: Configuration completed successfully, state set to ready")
+        } else {
+            purchaseState = .error("Subscription options not available. Please check your connection and try again.")
+            purchaseError = "Subscription options not available. Please check your connection and try again."
+            logger.error("PurchaseManager: Configuration failed - no main paywall or products available")
+        }
+        
+        #if DEBUG
+        print("[Paywalls] main=\(paywall?.identifier ?? "nil") products=\(products.count)")
+        print("[Paywalls] tokens=\(paywallTokens?.identifier ?? "nil") tokenProducts=\(tokenProducts.count)")
+        print("[Paywalls] avatars=\(paywallAvatars?.identifier ?? "nil") avatarsProducts=\(avatarsProducts.count)")
+        #endif
+    }
+
+    func makePurchase(product: ApphudProduct, completion: @escaping(Bool, String?) -> Void) {
+        guard purchaseState != .purchasing else {
+            logger.warning("PurchaseManager: Purchase already in progress, ignoring duplicate request")
+            completion(false, "Purchase already in progress")
+            return
+        }
+        
+        let allProducts = products + tokenProducts + avatarsProducts
+        guard !allProducts.isEmpty else {
+            logger.error("PurchaseManager: Cannot purchase - no products loaded from any paywall")
+            let errorMsg = "Products are not loaded. Please try again."
+            purchaseError = errorMsg
+            completion(false, errorMsg)
+            return
+        }
+        
+        guard allProducts.contains(where: { $0.productId == product.productId }) else {
+            logger.error("PurchaseManager: Product \(product.productId) not found in available products (subs/tokens/avatars)")
+            let errorMsg = "Selected product is not available"
+            purchaseError = errorMsg
+            completion(false, errorMsg)
+            return
+        }
+        
+        let isTokenProduct = tokenProducts.contains(where: { $0.productId == product.productId })
+        let isAvatarProduct = avatarsProducts.contains(where: { $0.productId == product.productId })
+        
+        logger.info("PurchaseManager: Starting purchase for product \(product.productId), isTokenProduct: \(isTokenProduct), isAvatarProduct: \(isAvatarProduct)")
+        purchaseState = .purchasing
+        purchaseError = nil
+        
+        Task { @MainActor in
+            let result = await Apphud.fallbackPurchase(product: product)
+            
+            if result {
+                logger.info("PurchaseManager: Purchase successful for product \(product.productId)")
+                
+                if isTokenProduct {
+                    let tokensToAdd = extractTokensCount(from: product.productId)
+                    if tokensToAdd > 0 {
+                        self.tokens += tokensToAdd
+                        logger.info("PurchaseManager: Added \(tokensToAdd) tokens. Total tokens: \(self.tokens)")
+                        
+                        Task.detached { [tokens = self.tokens] in
+                            _ = await KeychainManager.shared.save(tokens, forKey: "tokens")
+                        }
+                    } else {
+                        logger.warning("PurchaseManager: Could not extract tokens count from productId: \(product.productId)")
+                    }
+                }
+                
+                if isAvatarProduct {
+                    let avatarsToAdd = extractTokensCount(from: product.productId)
+                    if avatarsToAdd > 0 {
+                        self.avatars += avatarsToAdd
+                        logger.info("PurchaseManager: Added \(avatarsToAdd) avatars. Total avatars: \(self.avatars)")
+                        
+                        Task.detached { [avatars = self.avatars] in
+                            _ = await KeychainManager.shared.save(avatars, forKey: "avatars")
+                        }
+                    } else {
+                        logger.warning("PurchaseManager: Could not extract avatars count from productId: \(product.productId)")
+                    }
+                }
+                
+                self.isSubscribed = Apphud.hasPremiumAccess()
+                self.purchaseState = .ready
+                self.purchaseError = nil
+                completion(true, nil)
+            } else {
+                logger.error("PurchaseManager: Purchase failed for product \(product.productId)")
+                let errorMsg = "Purchase was not completed. Please try again."
+                self.purchaseState = .ready
+                self.purchaseError = errorMsg
+                completion(false, errorMsg)
+            }
+        }
+    }
+    
+    private func extractTokensCount(from productId: String) -> Int {
+        let components = productId.components(separatedBy: "_")
+        if let firstComponent = components.first, let count = Int(firstComponent) {
+            return count
+        }
+        
+        let regex = try? NSRegularExpression(pattern: "^([0-9]+)", options: [])
+        let range = NSRange(location: 0, length: productId.utf16.count)
+        if let match = regex?.firstMatch(in: productId, options: [], range: range),
+           let matchRange = Range(match.range, in: productId),
+           let count = Int(String(productId[matchRange])) {
+            return count
+        }
+        
+        return 0
+    }
+
+    func restorePurchase(completion: @escaping(Bool) -> Void) {
+        logger.info("PurchaseManager: Starting restore purchases")
+        Apphud.restorePurchases { [weak self] subscriptions, purchases, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                
+                if let error = error {
+                    self.logger.error("PurchaseManager: Restore failed - \(error.localizedDescription)")
+                    self.failRestoreText = "Restore purchases failed: \(error.localizedDescription)"
+                    completion(false)
+                    return
+                }
+
+                if let subscriptions = subscriptions, subscriptions.contains(where: { $0.isActive() }) {
+                    self.logger.info("PurchaseManager: Restore successful - active subscription found")
+                    self.isSubscribed = Apphud.hasPremiumAccess()
+                    self.failRestoreText = nil
+                    completion(true)
+                    return
+                }
+
+                if let purchases = purchases, purchases.contains(where: { $0.isActive() }) {
+                    self.logger.info("PurchaseManager: Restore successful - active purchase found")
+                    self.isSubscribed = Apphud.hasPremiumAccess()
+                    self.failRestoreText = nil
+                    completion(true)
+                    return
+                }
+
+                self.logger.warning("PurchaseManager: Nothing to restore")
+                self.failRestoreText = "Nothing to restore"
+                completion(false)
+            }
+        }
+    }
+    
+    
+    /// Проверяет, является ли пользователь русским через Apphud плейсменты
+    /// Если paywall = "main" (не "mainRus"), значит пользователь НЕ русский
+    /// Также проверяет флаг принудительного использования русского пэйвола
+    private func isRussianUserFromApphud() async -> Bool {
+        print("🔍 [ApphudManager] Начинаем проверку через Apphud плейсменты...")
+        
+        // Проверяем плейсмент main
+        if let mainPlacement = await Apphud.placement("main") {
+            print("🔍 [ApphudManager] Плейсмент 'main' найден")
+            
+            if let mainPaywall = mainPlacement.paywall {
+                let paywallId = mainPaywall.identifier
+                let isMainRussian = paywallId == "mainRus"
+                
+                print("🔍 [ApphudManager] Paywall identifier: '\(paywallId)'")
+                print("🔍 [ApphudManager] isRussian: \(isMainRussian)")
+                
+                return isMainRussian
+            } else {
+                print("[ApphudManager] Плейсмент 'main' найден, но paywall отсутствует")
+            }
+        } else {
+            print("[ApphudManager] Плейсмент 'main' не найден")
+        }
+        
+        // Если плейсмент не найден или paywall отсутствует, считаем что НЕ русский
+        print("[ApphudManager] Считаем пользователя НЕ русским (плейсмент не найден)")
+        return false
+    }
+
+    // Дополнительная проверка подписки через кастомный API оплаты
+    private func refreshSubscriptionFromAPI() async {
+        do {
+            let status = try await APIPaymentManager.shared.fetchSubscriptionStatus(userId: self.userId)
+            let apphudHasAccess = Apphud.hasPremiumAccess()
+            let apiHasAccess = status.isActive
+            self.isSubscribed = apphudHasAccess || apiHasAccess
+            logger.info("PurchaseManager: Refreshed subscription from API. Apphud=\(apphudHasAccess), API=\(apiHasAccess)")
+        } catch {
+            logger.error("PurchaseManager: Failed to refresh subscription from API - \(error.localizedDescription)")
+        }
+        
+        // Обновляем флаг показа пейволла с учётом новой информации о подписке
+        self.isShowedPaywall = !self.isSubscribed && self.isOnboardingFinished
+    }
+
+    // MARK: - API subscription status polling
+    
+    func startPurchasePolling(productType: ProductType, productId: String?) {
+        guard subscriptionPollingTask == nil else { return }
+        paymentScreenClosedAt = nil
+        
+        subscriptionPollingTask = Task { [weak self] in
+            guard let self else { return }
+            
+            let pollingInterval: UInt64 = 5 * 1_000_000_000 // 5 seconds
+            let extraTimeAfterClose: TimeInterval = 30
+            var lastCheckedTransactionIds: Set<String> = []
+            
+            while !Task.isCancelled {
+                do {
+                    // Проверяем транзакции
+                    let transactions = try await APIPaymentManager.shared.fetchTransactions(userId: self.userId)
+                    
+                    // Находим новые транзакции
+                    let newTransactions = transactions.filter { !lastCheckedTransactionIds.contains($0.id) }
+                    lastCheckedTransactionIds = Set(transactions.map { $0.id })
+                    
+                    // Обрабатываем новые транзакции
+                    for transaction in newTransactions {
+                        await MainActor.run {
+                            self.processTransaction(transaction, productType: productType, expectedProductId: productId)
+                        }
+                    }
+                    
+                    // Для подписок также проверяем статус
+                    if productType == .subscription {
+                        let status = try await APIPaymentManager.shared.fetchSubscriptionStatus(userId: self.userId)
+                        if status.isActive {
+                            await MainActor.run {
+                                self.isSubscribed = true
+                                self.subscriptionPollingTask?.cancel()
+                                self.subscriptionPollingTask = nil
+                            }
+                            break
+                        }
+                    }
+                } catch {
+                    // ошибки игнорируем, просто пробуем снова через интервал
+                }
+                
+                if let closedAt = paymentScreenClosedAt {
+                    let elapsed = Date().timeIntervalSince(closedAt)
+                    if elapsed > extraTimeAfterClose {
+                        await MainActor.run {
+                            self.subscriptionPollingTask?.cancel()
+                            self.subscriptionPollingTask = nil
+                        }
+                        break
+                    }
+                }
+                
+                try? await Task.sleep(nanoseconds: pollingInterval)
+            }
+        }
+    }
+    
+    private func processTransaction(_ transaction: Transaction, productType: ProductType, expectedProductId: String?) {
+        // Проверяем, что транзакция соответствует ожидаемому продукту (если указан)
+        if let expectedId = expectedProductId, transaction.productId != expectedId {
+            return
+        }
+        
+        switch productType {
+        case .subscription:
+            if transaction.isSubscription {
+                self.isSubscribed = true
+                logger.info("PurchaseManager: Subscription activated from transaction \(transaction.id)")
+            }
+        case .tokens:
+            let tokensToAdd = extractTokensCount(from: transaction.productName)
+            if tokensToAdd > 0 {
+                self.tokens += tokensToAdd
+                logger.info("PurchaseManager: Added \(tokensToAdd) tokens from transaction \(transaction.id). Total tokens: \(self.tokens)")
+                
+                Task.detached { [tokens = self.tokens] in
+                    _ = await KeychainManager.shared.save(tokens, forKey: "tokens")
+                }
+            }
+        case .avatars:
+            let avatarsToAdd = extractAvatarsCount(from: transaction.productName)
+            if avatarsToAdd > 0 {
+                self.avatars += avatarsToAdd
+                logger.info("PurchaseManager: Added \(avatarsToAdd) avatars from transaction \(transaction.id). Total avatars: \(self.avatars)")
+                
+                Task.detached { [avatars = self.avatars] in
+                    _ = await KeychainManager.shared.save(avatars, forKey: "avatars")
+                }
+            }
+        }
+    }
+    
+    private func extractAvatarsCount(from productName: String) -> Int {
+        let lowercased = productName.lowercased()
+        let regex = try? NSRegularExpression(pattern: "([0-9]+)\\s*avatar", options: [.caseInsensitive])
+        let range = NSRange(location: 0, length: lowercased.utf16.count)
+        if let match = regex?.firstMatch(in: lowercased, options: [], range: range),
+           let matchRange = Range(match.range(at: 1), in: lowercased),
+           let count = Int(String(lowercased[matchRange])) {
+            return count
+        }
+        return 0
+    }
+    
+    func notifyPaymentScreenClosed() {
+        if paymentScreenClosedAt == nil {
+            paymentScreenClosedAt = Date()
+        }
+    }
+    
+    // MARK: - Legacy method for backward compatibility
+    func startSubscriptionPolling() {
+        startPurchasePolling(productType: .subscription, productId: nil)
+    }
+}
+
+
+
