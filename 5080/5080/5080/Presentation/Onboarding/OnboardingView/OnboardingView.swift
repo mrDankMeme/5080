@@ -56,7 +56,6 @@ public struct OnboardingView: View {
                     )
                     .frame(width: proxy.size.width)
                     .frame(maxHeight: .infinity, alignment: .bottom)
-                    .offset(y: -onboardingBottomLift(safeBottom: proxy.safeAreaInsets.bottom))
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(2)
                 }
@@ -218,15 +217,6 @@ private extension OnboardingView {
         }
     }
 
-    func onboardingBottomLift(safeBottom: CGFloat) -> CGFloat {
-        switch DeviceLayout.type {
-        case .iPad, .smallStatusBar:
-            return max(148.scale, safeBottom + 56.scale)
-        case  .notch, .dynamicIsland, .unknown:
-            return 0
-        }
-    }
-
     func requestSystemReview() {
         guard let windowScene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
@@ -268,17 +258,33 @@ private extension OnboardingView {
     @ViewBuilder
     func onboardingSlideImageView(_ slide: OnboardingSlide) -> some View {
         let layoutType = DeviceLayout.type
-        let resolvedScale = slide.scale.resolve(for: layoutType)
+        let baseScale = slide.scale.resolve(for: layoutType)
+        let slideScale = onboardingSlideImageScale(for: slide.id, layoutType: layoutType)
         let resolvedTopOffset = onboardingSlideImageTopOffset(for: slide.id, layoutType: layoutType)
         Image(slide.imageName)
             .resizable()
             .scaledToFit()
             .frame(
-                width: slide.imageWidth * resolvedScale.x,
-                height: slide.imageHeight * resolvedScale.y
+                width: slide.imageWidth * baseScale.x * slideScale,
+                height: slide.imageHeight * baseScale.y * slideScale
             )
             .padding(.top, resolvedTopOffset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    func onboardingSlideImageScale(for slideID: Int, layoutType: DeviceLayoutType) -> CGFloat {
+        let isIpad = layoutType == .iPad || layoutType == .unknown || layoutType == .smallStatusBar
+
+        switch slideID {
+        case 0:
+            return isIpad ? 0.8 : 1
+        case 1:
+            return isIpad ? 0.8 : 1
+        case 2:
+            return isIpad ? 0.7 : 1
+        default:
+            return 1
+        }
     }
 
     func onboardingSlideImageTopOffset(for slideID: Int, layoutType: DeviceLayoutType) -> CGFloat {
@@ -286,11 +292,11 @@ private extension OnboardingView {
 
         switch slideID {
         case 0:
-            return isIpad ? 0.scale : 0.scale
+            return isIpad ? -30.scale : 0.scale
         case 1:
-            return isIpad ? -30.scale : -50.scale
+            return isIpad ? -70.scale : -50.scale
         case 2:
-            return isIpad ? -30.scale : -58.scale
+            return isIpad ? -45.scale : -58.scale
         default:
             return 0.scale
         }

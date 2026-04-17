@@ -62,7 +62,6 @@ public struct OnboardingView: View {
                         }
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .offset(y: -onboardingBottomLift(safeBottom: proxy.safeAreaInsets.bottom))
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(2)
                 }
@@ -218,15 +217,6 @@ private extension OnboardingView {
             for window in scene.windows {
                 window.overrideUserInterfaceStyle = style
             }
-        }
-    }
-
-    func onboardingBottomLift(safeBottom: CGFloat) -> CGFloat {
-        switch DeviceLayout.type {
-        case .iPad, .smallStatusBar:
-            return max(148.scale, safeBottom + 56.scale)
-        case  .notch, .dynamicIsland, .unknown:
-            return 0
         }
     }
 

@@ -137,11 +137,19 @@ struct PaywallView: View {
 
     @ViewBuilder
     private func backgroundView(geo: GeometryProxy) -> some View {
+        let layoutType = DeviceLayout.type
+        let backgroundLift = paywallBackgroundImageLift(for: layoutType)
+
         ZStack {
             Image("paywall_pic")
                 .resizable()
                 .scaledToFill()
-                .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+                .frame(
+                    width: geo.size.width,
+                    height: geo.size.height + backgroundLift,
+                    alignment: .top
+                )
+                .offset(y: -backgroundLift)
                 .clipped()
                 .ignoresSafeArea()
 
@@ -157,6 +165,11 @@ struct PaywallView: View {
             .ignoresSafeArea()
         }
         .accessibilityHidden(true)
+    }
+
+    private func paywallBackgroundImageLift(for layoutType: DeviceLayoutType) -> CGFloat {
+        let isIpad = layoutType == .iPad || layoutType == .unknown || layoutType == .smallStatusBar
+        return isIpad ? 180.scale : 0.scale
     }
 
     @ViewBuilder

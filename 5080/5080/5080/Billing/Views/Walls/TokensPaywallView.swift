@@ -31,6 +31,8 @@ struct TokensPaywallView: View {
         static let contentSpacerMin: CGFloat = 4.scale
         static let continueTopSpacing: CGFloat = 10.scale
         static let footerTopSpacing: CGFloat = 10.scale
+        static let compactLayoutBottomContentLift: CGFloat = 120
+        static let compactLayoutHeroLift: CGFloat = 220
     }
 
     @EnvironmentObject private var purchaseManager: PurchaseManager
@@ -99,6 +101,24 @@ struct TokensPaywallView: View {
         5_000_000_000
     }
 
+    private var usesCompactPadTokenLayout: Bool {
+        switch DeviceLayout.type {
+        case .iPad, .unknown, .smallStatusBar:
+            return true
+        case .notch, .dynamicIsland:
+            return false
+        }
+    }
+
+    private var bottomContentTopOffset: CGFloat {
+        TokensPaywallLayout.bottomContentTopOffset
+            - (usesCompactPadTokenLayout ? TokensPaywallLayout.compactLayoutBottomContentLift : 0)
+    }
+
+    private var heroContentVerticalOffset: CGFloat {
+        usesCompactPadTokenLayout ? -TokensPaywallLayout.compactLayoutHeroLift : 0
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let columnWidth = contentColumnWidth(containerWidth: geometry.size.width)
@@ -115,7 +135,7 @@ struct TokensPaywallView: View {
                     .frame(maxWidth: .infinity)
 
                 bottomContent(width: columnWidth)
-                    .padding(.top, TokensPaywallLayout.bottomContentTopOffset)
+                    .padding(.top, bottomContentTopOffset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -306,14 +326,17 @@ struct TokensPaywallView: View {
         let heroHeight = width * (276.0 / 402.0)
 
         return ZStack {
-            if UIImage(named: TokensPaywallAssets.heroImageName) != nil {
-                Image(TokensPaywallAssets.heroImageName)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                heroBackground
-                heroPlaceholderContent
+            ZStack {
+                if UIImage(named: TokensPaywallAssets.heroImageName) != nil {
+                    Image(TokensPaywallAssets.heroImageName)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    heroBackground
+                    heroPlaceholderContent
+                }
             }
+            .offset(y: heroContentVerticalOffset)
         }
         .frame(width: width, height: heroHeight)
         .clipShape(RoundedRectangle(cornerRadius: 26.scale, style: .continuous))
