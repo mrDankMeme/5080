@@ -1,3 +1,4 @@
+import UIKit
 import SwiftUI
 
 struct Base44ProjectRowView: View {
@@ -23,6 +24,11 @@ struct Base44ProjectRowView: View {
                         .font(Tokens.Font.semibold17)
                         .foregroundStyle(Tokens.Color.inkPrimary)
                         .lineLimit(2)
+
+                    Text(project.locationLabel)
+                        .font(Tokens.Font.regular13)
+                        .foregroundStyle(Tokens.Color.textSecondary)
+                        .lineLimit(1)
 
                     HStack(spacing: 8.scale) {
                         Text(project.statusTitle)
@@ -62,6 +68,20 @@ struct Base44ProjectRowView: View {
 
 struct Base44LogoMarkView: View {
     var body: some View {
+        Group {
+            if UIImage(named: "base44_header_logo") != nil {
+                Image("base44_header_logo")
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                fallbackMark
+            }
+        }
+    }
+}
+
+private extension Base44LogoMarkView {
+    var fallbackMark: some View {
         ZStack {
             Circle()
                 .stroke(Tokens.Color.base44BrandOrange, lineWidth: 2.2.scale)
@@ -78,6 +98,19 @@ struct Base44LogoMarkView: View {
 }
 
 private extension SiteMakerProjectSummary {
+    var locationLabel: String {
+        guard
+            let previewURLString,
+            let previewURL = URL(string: previewURLString),
+            let host = previewURL.host(percentEncoded: false)?.trimmed,
+            !host.isEmpty
+        else {
+            return "Continue building in chat"
+        }
+
+        return host
+    }
+
     var statusTitle: String {
         switch status.lowercased() {
         case "live":

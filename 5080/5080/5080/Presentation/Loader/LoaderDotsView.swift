@@ -25,7 +25,7 @@ struct LoaderDotsView: View {
 
     private func dot(isActive: Bool) -> some View {
         Circle()
-            .fill(isActive ? Color(hex: "#6A4FF1")! : Color(hex: "#6A4FF1")!.opacity(0.3))
+            .fill(isActive ? Color(hex: "#F3671B")! : Color(hex: "#F3671B")!.opacity(0.3))
             .frame(width: dotSize, height: dotSize)
     }
 

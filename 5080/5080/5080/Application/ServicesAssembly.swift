@@ -293,6 +293,11 @@ final class ServicesAssembly: Assembly {
         }
         .inObjectScope(.container)
 
+        container.register(SitePreviewSceneViewModelFactoryProtocol.self) { _ in
+            DefaultSitePreviewSceneViewModelFactory()
+        }
+        .inObjectScope(.container)
+
         container.register(AppFlowViewModel.self) { r in
             AppFlowViewModel(
                 authorizeUserUseCase: r.resolve(AuthorizeUserUseCase.self)!,
@@ -637,7 +642,8 @@ final class ServicesAssembly: Assembly {
                 homeViewModel: r.resolve(Base44HomeSceneViewModel.self)!,
                 settingsViewModel: r.resolve(RootSettingsSceneViewModel.self)!,
                 billingAccessResolver: r.resolve(BillingAccessResolving.self)!,
-                builderViewModelFactory: r.resolve(BuilderWorkspaceSceneViewModelFactoryProtocol.self)!
+                builderViewModelFactory: r.resolve(BuilderWorkspaceSceneViewModelFactoryProtocol.self)!,
+                sitePreviewViewModelFactory: r.resolve(SitePreviewSceneViewModelFactoryProtocol.self)!
             )
         }
         .inObjectScope(.container)

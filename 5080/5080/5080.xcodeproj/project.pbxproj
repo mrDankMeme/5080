@@ -96,6 +96,8 @@
 		3C061B807E13FB35F708C3CF /* EdgeSwipeCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 185D500A2F572D4500D72ABF /* EdgeSwipeCapture.swift */; };
 		3D3CA2274BBAEDB9B5C0B6AE /* PurchaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D201B4D3172138A14D8459F /* PurchaseManager.swift */; };
 		3DCEE24FAD9649333D2A3794 /* SettingsHostViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 185D4FC22F572D4500D72ABF /* SettingsHostViewController.swift */; };
+		3F98119B201E4B93A52AE005 /* SitePreviewSceneViewModelFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95B2ACA69898468AB41DEEBD /* SitePreviewSceneViewModelFactory.swift */; };
+		3FDCD8ECD64B4088BBEDA2C7 /* SitePreviewSceneViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4AC513CCF1B43DF8158AA2E /* SitePreviewSceneViewModel.swift */; };
 		444930196A557EFA733975B0 /* APIConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8CEB14E92C5E382457CE23A /* APIConfig.swift */; };
 		45CC46207DD794A0FE80CA04 /* SettingsButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 185D501A2F572D4500D72ABF /* SettingsButton.swift */; };
 		464F530F43298CBEF7521B29 /* BuilderWorkspaceSceneComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE4DC07AB5D27355510A4555 /* BuilderWorkspaceSceneComponents.swift */; };
@@ -144,6 +146,7 @@
 		8C72F003CA43BC10994712F5 /* SubscriptionKind.swift in Sources */ = {isa = PBXBuildFile; fileRef = 185D4F5A2F572D4500D72ABF /* SubscriptionKind.swift */; };
 		8F98BF3BBAD441D09E64AE3C /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 185D4FD12F572D4500D72ABF /* OnboardingView.swift */; };
 		9077DB75ACE3F7A735C74772 /* OnboardingViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 185D4FD02F572D4500D72ABF /* OnboardingViewModel.swift */; };
+		928DDAA4717842C7A9E37420 /* SitePreviewSceneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95527F133C064460983D8A5E /* SitePreviewSceneView.swift */; };
 		92E4A333DD4EC728C336734C /* Base44HomeSceneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91041013714ED1291DFF59CF /* Base44HomeSceneView.swift */; };
 		961E947353D741CB8C9F908A /* APIPaymentManager+Mocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 185D4F9E2F572D4500D72ABF /* APIPaymentManager+Mocks.swift */; };
 		96A2854C220F1A81BDB97FC6 /* SettingsMyProgressCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 185D4FCB2F572D4500D72ABF /* SettingsMyProgressCards.swift */; };
@@ -465,7 +468,9 @@
 		91041013714ED1291DFF59CF /* Base44HomeSceneView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Base44HomeSceneView.swift; sourceTree = "<group>"; };
 		91A0760F193AA9AAB4ED2141 /* ISO8601DateFormatter+FractionalSeconds.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "ISO8601DateFormatter+FractionalSeconds.swift"; sourceTree = "<group>"; };
 		91AFB2EBDBEBE570D6A5F747 /* SiteMakerRepository.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SiteMakerRepository.swift; sourceTree = "<group>"; };
+		95527F133C064460983D8A5E /* SitePreviewSceneView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SitePreviewSceneView.swift; sourceTree = "<group>"; };
 		958565BA83828F4D7562481F /* BackendUseCases.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BackendUseCases.swift; sourceTree = "<group>"; };
+		95B2ACA69898468AB41DEEBD /* SitePreviewSceneViewModelFactory.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SitePreviewSceneViewModelFactory.swift; sourceTree = "<group>"; };
 		9D9340269D0F4AE2A5848175 /* TranscribeBackendConfig.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TranscribeBackendConfig.swift; sourceTree = "<group>"; };
 		A1F000000000000000000101 /* FrameToVideoFlowView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FrameToVideoFlowView.swift; sourceTree = "<group>"; };
 		A1F000000000000000000102 /* FrameToVideoFlowViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FrameToVideoFlowViewModel.swift; sourceTree = "<group>"; };
@@ -500,6 +505,7 @@
 		C75CD0E5119F632CE29A094D /* TextToVideoSettingsSheetView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TextToVideoSettingsSheetView.swift; sourceTree = "<group>"; };
 		CD347F046B0507668B7528A6 /* TextToVideoFlowViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TextToVideoFlowViewModel.swift; sourceTree = "<group>"; };
 		D17596E932C540F9868F02C8 /* TranscribeBackendUseCases.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TranscribeBackendUseCases.swift; sourceTree = "<group>"; };
+		D4AC513CCF1B43DF8158AA2E /* SitePreviewSceneViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SitePreviewSceneViewModel.swift; sourceTree = "<group>"; };
 		D4F000000000000000000101 /* AIImageFlowView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AIImageFlowView.swift; sourceTree = "<group>"; };
 		D4F000000000000000000102 /* AIImageFlowViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AIImageFlowViewModel.swift; sourceTree = "<group>"; };
 		D4F000000000000000000103 /* AIImageInspirationCard.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AIImageInspirationCard.swift; sourceTree = "<group>"; };
@@ -553,7 +559,6 @@
 				91AFB2EBDBEBE570D6A5F747 /* SiteMakerRepository.swift */,
 				7F4D6263D4F8D9D5E4FD1EAD /* SiteMakerUseCases.swift */,
 			);
-			name = SiteMaker;
 			path = SiteMaker;
 			sourceTree = "<group>";
 		};
@@ -909,6 +914,7 @@
 				DFA3712C47C0B13367CE9B12 /* SiteMakerBuilderShared */,
 				57A1586E4B30B8D0C01FC70B /* Base44HomeScene */,
 				4FE4987A39DCB0B0BC2524E6 /* BuilderWorkspaceScene */,
+				30A4157DC30A4A90B0F0570F /* SitePreviewScene */,
 			);
 			path = Presentation;
 			sourceTree = "<group>";
@@ -1137,6 +1143,16 @@
 			path = Protocols;
 			sourceTree = "<group>";
 		};
+		30A4157DC30A4A90B0F0570F /* SitePreviewScene */ = {
+			isa = PBXGroup;
+			children = (
+				D4AC513CCF1B43DF8158AA2E /* SitePreviewSceneViewModel.swift */,
+				95527F133C064460983D8A5E /* SitePreviewSceneView.swift */,
+				95B2ACA69898468AB41DEEBD /* SitePreviewSceneViewModelFactory.swift */,
+			);
+			path = SitePreviewScene;
+			sourceTree = "<group>";
+		};
 		319017ED8AC0210828F9BC94 /* TextToVideoScene */ = {
 			isa = PBXGroup;
 			children = (
@@ -1176,7 +1192,6 @@
 				EE4DC07AB5D27355510A4555 /* BuilderWorkspaceSceneComponents.swift */,
 				5BB89C2EC81F9031A5565C93 /* SitePreviewWebView.swift */,
 			);
-			name = BuilderWorkspaceScene;
 			path = BuilderWorkspaceScene;
 			sourceTree = "<group>";
 		};
@@ -1197,7 +1212,6 @@
 				91041013714ED1291DFF59CF /* Base44HomeSceneView.swift */,
 				71CD2D1393CFE6F29B9DD828 /* Base44HomeSceneComponents.swift */,
 			);
-			name = Base44HomeScene;
 			path = Base44HomeScene;
 			sourceTree = "<group>";
 		};
@@ -1236,7 +1250,6 @@
 			children = (
 				AD6E95366EFB67FCC01C484D /* SiteMakerConfiguration.swift */,
 			);
-			name = Configuration;
 			path = Configuration;
 			sourceTree = "<group>";
 		};
@@ -1245,7 +1258,6 @@
 			children = (
 				F306F34E1B2718CD9834D921 /* SiteMakerAuthorizationProvider.swift */,
 			);
-			name = SiteMaker;
 			path = SiteMaker;
 			sourceTree = "<group>";
 		};
@@ -1276,7 +1288,6 @@
 				2A81EC3814324CC490E95C81 /* SiteMakerRemoteService.swift */,
 				F3973756366F0112766ACEBE /* SiteMakerRepositoryImpl.swift */,
 			);
-			name = SiteMaker;
 			path = SiteMaker;
 			sourceTree = "<group>";
 		};
@@ -1381,14 +1392,6 @@
 			path = TranscribeResultScene;
 			sourceTree = "<group>";
 		};
-		C74022BD51CE720914F51311 /* Utils */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			name = Utils;
-			path = Utils;
-			sourceTree = "<group>";
-		};
 		D4F000000000000000000201 /* AIImage */ = {
 			isa = PBXGroup;
 			children = (
@@ -1441,7 +1444,6 @@
 				76989C77E29EB0D68D51CD45 /* BuilderAttachmentPickerButton.swift */,
 				7F28793B183DC8BD821B8EA0 /* PendingAttachmentsStripView.swift */,
 			);
-			name = SiteMakerBuilderShared;
 			path = SiteMakerBuilderShared;
 			sourceTree = "<group>";
 		};
@@ -1819,6 +1821,9 @@
 				DFDD40291356A67C8AFB88A2 /* BuilderWorkspaceSceneView.swift in Sources */,
 				464F530F43298CBEF7521B29 /* BuilderWorkspaceSceneComponents.swift in Sources */,
 				1B35AA8160A99FFF68BE9104 /* SitePreviewWebView.swift in Sources */,
+				928DDAA4717842C7A9E37420 /* SitePreviewSceneView.swift in Sources */,
+				3FDCD8ECD64B4088BBEDA2C7 /* SitePreviewSceneViewModel.swift in Sources */,
+				3F98119B201E4B93A52AE005 /* SitePreviewSceneViewModelFactory.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1953,7 +1958,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = K9G8G4JVSL;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = 5080/Info.plist;
@@ -1996,7 +2001,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = K9G8G4JVSL;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = 5080/Info.plist;

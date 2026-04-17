@@ -38,6 +38,7 @@ final class DefaultBillingAccessResolver: BillingAccessResolving {
 @MainActor
 final class RootTabViewModel: ObservableObject {
     @Published private(set) var builderPresentation: BuilderPresentationContext?
+    @Published private(set) var sitePreviewViewModel: SitePreviewSceneViewModel?
     @Published private(set) var isSettingsPresented = false
     @Published private(set) var isSubscriptionPaywallPresented = false
     @Published private(set) var isTokensPaywallPresented = false
@@ -47,17 +48,20 @@ final class RootTabViewModel: ObservableObject {
 
     private let billingAccessResolver: BillingAccessResolving
     private let builderViewModelFactory: BuilderWorkspaceSceneViewModelFactoryProtocol
+    private let sitePreviewViewModelFactory: SitePreviewSceneViewModelFactoryProtocol
 
     init(
         homeViewModel: Base44HomeSceneViewModel,
         settingsViewModel: RootSettingsSceneViewModel,
         billingAccessResolver: BillingAccessResolving,
-        builderViewModelFactory: BuilderWorkspaceSceneViewModelFactoryProtocol
+        builderViewModelFactory: BuilderWorkspaceSceneViewModelFactoryProtocol,
+        sitePreviewViewModelFactory: SitePreviewSceneViewModelFactoryProtocol
     ) {
         self.homeViewModel = homeViewModel
         self.settingsViewModel = settingsViewModel
         self.billingAccessResolver = billingAccessResolver
         self.builderViewModelFactory = builderViewModelFactory
+        self.sitePreviewViewModelFactory = sitePreviewViewModelFactory
     }
 
     func loadHomeIfNeeded() async {
@@ -88,17 +92,27 @@ final class RootTabViewModel: ObservableObject {
             return
         }
 
+        sitePreviewViewModel = nil
         builderPresentation = BuilderPresentationContext(launch: launch)
     }
 
     func openProject(_ project: SiteMakerProjectSummary) {
-        builderPresentation = BuilderPresentationContext(
-            launch: .existing(project: project)
-        )
+        if let previewViewModel = sitePreviewViewModelFactory.make(project: project) {
+            builderPresentation = nil
+            sitePreviewViewModel = previewViewModel
+            return
+        }
+
+        sitePreviewViewModel = nil
+        builderPresentation = BuilderPresentationContext(launch: .existing(project: project))
     }
 
     func dismissBuilder() {
         builderPresentation = nil
+    }
+
+    func dismissSitePreview() {
+        sitePreviewViewModel = nil
     }
 
     func refreshProjects() async {

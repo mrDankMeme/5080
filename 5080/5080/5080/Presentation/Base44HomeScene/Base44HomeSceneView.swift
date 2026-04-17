@@ -44,7 +44,7 @@ private extension Base44HomeSceneView {
         HStack(spacing: 12.scale) {
             HStack(spacing: 6.2.scale) {
                 Base44LogoMarkView()
-                    .frame(width: 26.5.scale, height: 26.5.scale)
+                    .frame(width: 25.6.scale, height: 25.6.scale)
 
                 Text("Base44")
                     .font(Tokens.Font.bold32)

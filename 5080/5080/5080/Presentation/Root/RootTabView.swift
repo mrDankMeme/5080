@@ -49,6 +49,18 @@ struct RootTabView: View {
                 )
             )
         }
+        .fullScreenCover(
+            item: Binding(
+                get: { viewModel.sitePreviewViewModel },
+                set: { previewViewModel in
+                    if previewViewModel == nil {
+                        viewModel.dismissSitePreview()
+                    }
+                }
+            )
+        ) { previewViewModel in
+            SitePreviewSceneView(viewModel: previewViewModel)
+        }
         .fullScreenCover(isPresented: Binding(
             get: { viewModel.isSubscriptionPaywallPresented },
             set: { isPresented in
