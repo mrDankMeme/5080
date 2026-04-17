@@ -1,0 +1,660 @@
+////////////////////////////////////////////////////////////
+// FILE: ChatHistoryAllView.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+import Swinject
+
+public struct ChatHistoryAllView: View {
+
+    @Environment(\.resolver) private var resolver
+    @StateObject private var vm: ChatHistoryListViewModel
+
+    @State private var renameTarget: ChatThreadRowViewModel? = nil
+    @State private var renameText: String = ""
+    @State private var isRenamePresented: Bool = false
+
+    @State private var deleteTarget: ChatThreadRowViewModel? = nil
+    @State private var isDeleteConfirmPresented: Bool = false
+
+    public init(vm: ChatHistoryListViewModel) {
+        _vm = StateObject(wrappedValue: vm)
+    }
+
+    public var body: some View {
+        VStack(spacing: 12) {
+
+            
+            searchBar
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+
+            if vm.all.isEmpty {
+                
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Все чаты")
+                        .font(.title3)
+                        .bold()
+
+                    Text("История пока пуста.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Spacer()
+
+            } else if vm.filteredAll.isEmpty {
+                
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Ничего не найдено")
+                        .font(.headline)
+
+                    Text("Попробуй изменить запрос поиска.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Spacer()
+
+            } else {
+                List {
+                    ForEach(vm.filteredAll) { row in
+                        NavigationLink {
+                            OpenAIChatThreadView(
+                                vm: resolver.resolve(OpenAITextChatViewModel.self)!,
+                                conversationId: row.conversationId
+                            )
+                        } label: {
+                            ChatHistoryThreadCardView(row: row)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                deleteTarget = row
+                                isDeleteConfirmPresented = true
+                            } label: {
+                                Label("Удалить", systemImage: "trash")
+                            }
+                        }
+                        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                            Button {
+                                renameTarget = row
+                                renameText = row.title
+                                isRenamePresented = true
+                            } label: {
+                                Label("Переименовать", systemImage: "pencil")
+                            }
+                            .tint(.blue)
+                        }
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+            }
+        }
+        .navigationTitle("Все чаты")
+        .navigationBarTitleDisplayMode(.inline)
+        .alert("Переименовать чат", isPresented: $isRenamePresented) {
+            TextField("Название", text: $renameText)
+
+            Button("Сохранить") {
+                guard let row = renameTarget else { return }
+                let newTitle = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard newTitle.isEmpty == false else { return }
+
+                Task { [resolver] in
+                    let useCase = resolver.resolve(RenameChatThreadUseCase.self)!
+                    try? await useCase.execute(conversationId: row.conversationId, newTitle: newTitle)
+                }
+            }
+
+            Button("Отмена", role: .cancel) { }
+        } message: {
+            Text("Название хранится локально (на устройстве).")
+        }
+        .confirmationDialog(
+            "Удалить чат из истории?",
+            isPresented: $isDeleteConfirmPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Удалить", role: .destructive) {
+                guard let row = deleteTarget else { return }
+                Task { [resolver] in
+                    let useCase = resolver.resolve(DeleteChatThreadUseCase.self)!
+                    try? await useCase.execute(threadId: row.id)
+                }
+            }
+            Button("Отмена", role: .cancel) { }
+        } message: {
+            Text("Это удалит чат только локально. Серверный conversation не трогаем.")
+        }
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+
+            TextField("Поиск по чатам", text: $vm.searchQuery)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+
+            if vm.searchQuery.isEmpty == false {
+                Button {
+                    vm.searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(Color.black.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ChatHistoryListView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+import Swinject
+
+public struct ChatHistoryListView: View {
+
+    @Environment(\.resolver) private var resolver
+    @StateObject private var vm: ChatHistoryListViewModel
+
+    @State private var renameTarget: ChatThreadRowViewModel? = nil
+    @State private var renameText: String = ""
+    @State private var isRenamePresented: Bool = false
+
+    @State private var deleteTarget: ChatThreadRowViewModel? = nil
+    @State private var isDeleteConfirmPresented: Bool = false
+
+    public init(vm: ChatHistoryListViewModel) {
+        _vm = StateObject(wrappedValue: vm)
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+
+            header
+
+            if vm.recent.isEmpty {
+                emptyState(text: "Пока нет недавних чатов.\nСоздай новый чат — и он появится здесь.")
+            } else {
+                List {
+                    ForEach(vm.recent) { row in
+                        NavigationLink {
+                            OpenAIChatThreadView(
+                                vm: makeChatVM(),
+                                conversationId: row.conversationId
+                            )
+                        } label: {
+                            ChatHistoryThreadCardView(row: row)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                deleteTarget = row
+                                isDeleteConfirmPresented = true
+                            } label: {
+                                Label("Удалить", systemImage: "trash")
+                            }
+                        }
+                        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                            Button {
+                                renameTarget = row
+                                renameText = row.title
+                                isRenamePresented = true
+                            } label: {
+                                Label("Переименовать", systemImage: "pencil")
+                            }
+                            .tint(.blue)
+                        }
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .alert("Переименовать чат", isPresented: $isRenamePresented) {
+            TextField("Название", text: $renameText)
+
+            Button("Сохранить") {
+                guard let row = renameTarget else { return }
+                let newTitle = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard newTitle.isEmpty == false else { return }
+
+                Task { [resolver] in
+                    let useCase = resolver.resolve(RenameChatThreadUseCase.self)!
+                    try? await useCase.execute(conversationId: row.conversationId, newTitle: newTitle)
+                }
+            }
+
+            Button("Отмена", role: .cancel) { }
+        } message: {
+            Text("Название хранится локально (на устройстве).")
+        }
+        .confirmationDialog(
+            "Удалить чат из истории?",
+            isPresented: $isDeleteConfirmPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Удалить", role: .destructive) {
+                guard let row = deleteTarget else { return }
+                Task { [resolver] in
+                    let useCase = resolver.resolve(DeleteChatThreadUseCase.self)!
+                    try? await useCase.execute(threadId: row.id)
+                }
+            }
+            Button("Отмена", role: .cancel) { }
+        } message: {
+            Text("Это удалит чат только локально. Серверный conversation не трогаем.")
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            Text("Недавние чаты")
+                .font(.title3)
+                .bold()
+
+            Spacer()
+
+            NavigationLink {
+                ChatHistoryAllView(vm: makeAllVM())
+            } label: {
+                Text("Все")
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(Color.black.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+    }
+
+    private func emptyState(text: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.black.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, 16)
+    }
+
+    // MARK: - Factories (DI)
+
+    private func makeAllVM() -> ChatHistoryListViewModel {
+        resolver.resolve(ChatHistoryListViewModel.self)!
+    }
+
+    private func makeChatVM() -> OpenAITextChatViewModel {
+        resolver.resolve(OpenAITextChatViewModel.self)!
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ChatHistoryListViewModel.swift
+////////////////////////////////////////////////////////////
+
+import Foundation
+import Combine
+
+@MainActor
+public final class ChatHistoryListViewModel: ObservableObject {
+
+    // MARK: - Output
+
+    @Published public private(set) var recent: [ChatThreadRowViewModel] = []
+
+    @Published public private(set) var all: [ChatThreadRowViewModel] = []
+
+    @Published public private(set) var filteredAll: [ChatThreadRowViewModel] = []
+
+    // MARK: - Input (Search)
+
+    @Published public var searchQuery: String = ""
+
+    // MARK: - Dependencies
+
+    private let observeUseCase: ObserveChatThreadsUseCase
+
+    // MARK: - Private
+
+    private var bag = Set<AnyCancellable>()
+    private let relativeFormatter = RelativeDateTimeFormatter()
+
+    private var latestThreads: [ChatThread] = []
+
+    // MARK: - Init
+
+    public init(observeUseCase: ObserveChatThreadsUseCase) {
+        self.observeUseCase = observeUseCase
+        bind()
+    }
+
+    // MARK: - Bindings
+
+    private func bind() {
+        let threadsPublisher = observeUseCase.execute()
+            .receive(on: DispatchQueue.main)
+            .handleEvents(receiveOutput: { [weak self] threads in
+                self?.latestThreads = threads
+            })
+            .share()
+
+        threadsPublisher
+            .map { [weak self] threads -> [ChatThreadRowViewModel] in
+                guard let self else { return [] }
+                let sorted = self.sortThreadsForUI(threads)
+                return sorted.map { self.mapThreadToRow($0) }
+            }
+            .sink { [weak self] rows in
+                guard let self else { return }
+                self.all = rows
+                self.recent = Array(rows.prefix(5))
+            }
+            .store(in: &bag)
+
+        let queryPublisher = $searchQuery
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .removeDuplicates()
+            .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
+
+        Publishers.CombineLatest(threadsPublisher, queryPublisher)
+            .map { [weak self] threads, query -> [ChatThreadRowViewModel] in
+                guard let self else { return [] }
+
+                let sorted = self.sortThreadsForUI(threads)
+
+                let filtered: [ChatThread]
+                if query.isEmpty {
+                    filtered = sorted
+                } else {
+                    let q = query.lowercased()
+                    filtered = sorted.filter { thread in
+                        let title = thread.title.lowercased()
+                        let preview = (thread.preview ?? "").lowercased()
+                        return title.contains(q) || preview.contains(q)
+                    }
+                }
+
+                return filtered.map { self.mapThreadToRow($0) }
+            }
+            .sink { [weak self] rows in
+                self?.filteredAll = rows
+            }
+            .store(in: &bag)
+    }
+
+    // MARK: - Sorting
+
+    private func sortThreadsForUI(_ threads: [ChatThread]) -> [ChatThread] {
+        threads.sorted { a, b in
+            if a.isPinned != b.isPinned {
+                return a.isPinned && !b.isPinned
+            }
+            return a.lastActivityAt > b.lastActivityAt
+        }
+    }
+
+    // MARK: - Mapping
+
+    private func mapThreadToRow(_ thread: ChatThread) -> ChatThreadRowViewModel {
+        let title = thread.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeTitle = title.isEmpty ? "Чат" : title
+
+        let timeAgo = relativeFormatter.localizedString(for: thread.lastActivityAt, relativeTo: Date())
+        let icon = thread.icon.systemImageName
+
+        return ChatThreadRowViewModel(
+            id: thread.id,
+            conversationId: thread.conversationId,
+            title: safeTitle,
+            timeAgo: timeAgo,
+            preview: thread.preview,
+            iconSystemName: icon
+        )
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ChatHistoryThreadCardView.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+
+struct ChatHistoryThreadCardView: View {
+
+    let row: ChatThreadRowViewModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+
+            icon
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(row.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Text(row.timeAgo)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                if let preview = row.preview?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !preview.isEmpty {
+                    Text(preview)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            bubble
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.black.opacity(0.03))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.black.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    private var icon: some View {
+        ZStack {
+            Circle()
+                .fill(Color.black.opacity(0.06))
+                .frame(width: 44, height: 44)
+
+            Image(systemName: row.iconSystemName)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.65))
+        }
+    }
+
+    private var bubble: some View {
+        ZStack {
+            Circle()
+                .fill(Color.black.opacity(0.06))
+                .frame(width: 34, height: 34)
+
+            Image(systemName: "message.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.55))
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ChatThreadRowViewModel.swift
+////////////////////////////////////////////////////////////
+
+
+
+import Foundation
+
+public struct ChatThreadRowViewModel: Identifiable, Equatable, Sendable {
+    public let id: UUID
+    public let conversationId: String
+    public let title: String
+    public let timeAgo: String
+    public let preview: String?
+    public let iconSystemName: String
+
+    public init(
+        id: UUID,
+        conversationId: String,
+        title: String,
+        timeAgo: String,
+        preview: String?,
+        iconSystemName: String
+    ) {
+        self.id = id
+        self.conversationId = conversationId
+        self.title = title
+        self.timeAgo = timeAgo
+        self.preview = preview
+        self.iconSystemName = iconSystemName
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: OpenAIChatThreadView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+import Swinject
+
+public struct OpenAIChatThreadView: View {
+
+    @Environment(\.resolver) private var resolver
+    @Environment(\.dismiss) private var dismiss
+
+    @StateObject private var vm: OpenAITextChatViewModel
+    private let conversationId: String
+    private let lastKnownItemId: String?
+
+    @State private var didLoad = false
+    @State private var isUnavailable = false
+
+    public init(
+        vm: OpenAITextChatViewModel,
+        conversationId: String,
+        lastKnownItemId: String? = nil
+    ) {
+        _vm = StateObject(wrappedValue: vm)
+        self.conversationId = conversationId
+        self.lastKnownItemId = lastKnownItemId
+    }
+
+    public var body: some View {
+        OpenAITextChatView(vm: vm)
+            .overlay(alignment: .bottom) {
+                if isUnavailable {
+                    unavailableBanner
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 12)
+                }
+            }
+            .task {
+                guard didLoad == false else { return }
+                didLoad = true
+
+                vm.openConversation(conversationId: conversationId, lastKnownItemId: lastKnownItemId)
+                await vm.loadInitialMessages(limit: 80)
+
+                let failed = vm.messages.contains { msg in
+                    msg.role == .assistant && msg.text.contains("Не удалось загрузить историю")
+                }
+                isUnavailable = failed
+            }
+    }
+
+    private var unavailableBanner: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("⚠️ Чат недоступен")
+                .font(.headline)
+
+            Text("Сервер не отдал историю (404/403/422 и т.п.). Можно удалить тред локально, чтобы не висел в списке.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            Button(role: .destructive) {
+                Task { [resolver] in
+                    let get = resolver.resolve(GetChatThreadUseCase.self)!
+                    let del = resolver.resolve(DeleteChatThreadUseCase.self)!
+
+                    if let thread = try? await get.execute(conversationId: conversationId) {
+                        try? await del.execute(threadId: thread.id)
+                    }
+
+                    await MainActor.run {
+                        dismiss()
+                    }
+                }
+            } label: {
+                Text("Удалить локально")
+                    .font(.body)
+                    .bold()
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.red.opacity(0.10))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.black.opacity(0.10), lineWidth: 1)
+        )
+    }
+}
+
+

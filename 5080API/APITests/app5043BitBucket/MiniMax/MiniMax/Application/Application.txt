@@ -1,0 +1,810 @@
+////////////////////////////////////////////////////////////
+// FILE: AppAssembler.swift
+////////////////////////////////////////////////////////////
+
+
+
+import Swinject
+
+enum AppAssembler {
+    static func make() -> Assembler {
+        Assembler([
+           ServicesAssembly()
+        ])
+    }
+}
+
+
+
+
+////////////////////////////////////////////////////////////
+// FILE: AppDelegate.swift
+////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////
+// FILE: AppDelegate.swift
+////////////////////////////////////////////////////////////
+
+import UIKit
+import ApphudSDK
+import AppTrackingTransparency
+import AdSupport
+import AmplitudeUnified
+
+final class AppDelegate: NSObject, UIApplicationDelegate {
+
+    // MARK: - UIApplicationDelegate
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+
+        Analytics.shared.track("app_open")
+
+        // Важно: Apphud.start(...) теперь выполняется в Billing-компоненте (PurchaseManager),
+        // чтобы не было двойного старта SDK.
+
+        // IDFV можно прокинуть сразу (IDFA появится после ATT, если разрешено).
+        Apphud.setDeviceIdentifiers(
+            idfa: nil,
+            idfv: UIDevice.current.identifierForVendor?.uuidString
+        )
+
+        requestATT()
+
+        return true
+    }
+
+    // MARK: - App lifecycle (Amplitude)
+
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        Analytics.shared.track("app_background")
+    }
+
+    func applicationWillTerminate(_ application: UIApplication) {
+        Analytics.shared.track("app_terminate")
+    }
+
+    // MARK: - ATT / IDFA
+
+    private func requestATT() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard self != nil else { return }
+
+            ATTrackingManager.requestTrackingAuthorization { status in
+                guard status == .authorized else { return }
+
+                let idfa = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+
+                DispatchQueue.main.async {
+                    Apphud.setDeviceIdentifiers(
+                        idfa: idfa,
+                        idfv: UIDevice.current.identifierForVendor?.uuidString
+                    )
+                }
+            }
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: AppFlowView.swift
+////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////
+// FILE: AppFlowView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+import Swinject
+
+private enum AppStep {
+    case deciding
+    case onboarding
+    case root
+}
+
+struct AppFlowView: View {
+    @Environment(\.resolver) private var resolver
+    @EnvironmentObject private var purchaseManager: PurchaseManager
+
+    @State private var step: AppStep = .deciding
+    @State private var showLoader: Bool = true
+
+    // 🔥 ТЕСТОВЫЙ флаг показа paywall
+    @State private var showPaywall: Bool = false
+
+    var body: some View {
+        ZStack {
+            if showLoader {
+                LoaderView {
+                    showLoader = false
+                    decideInitialStep()
+                }
+                .transition(.opacity)
+            } else {
+                switch step {
+                case .deciding:
+                    Color.clear
+                        .onAppear {
+                            decideInitialStep()
+                        }
+
+                case .onboarding:
+                    OnboardingView(
+                        vm: OnboardingViewModel(),
+                        onFinish: {
+                            Analytics.shared.track("onboarding_complete")
+
+                            Task {
+                                let onboardingStore = resolver.resolve(OnboardingStore.self)!
+                                await onboardingStore.setOnboardingCompleted(true)
+
+                                await MainActor.run {
+                                    step = .root
+                                }
+                            }
+                        }
+                    )
+
+                case .root:
+                    RootTabView()
+                        .onAppear {
+                            // ТЕСТОВЫЙ ПОКАЗ
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                showPaywall = false
+                            }
+                        }
+                        .fullScreenCover(isPresented: $showPaywall) {
+                            paywallView
+                        }
+                }
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: showLoader)
+    }
+}
+
+// MARK: - Private helpers
+
+extension AppFlowView {
+
+    private func decideInitialStep() {
+        let onboardingStore = resolver.resolve(OnboardingStore.self)!
+        Task {
+            async let onboardingDone = onboardingStore.isOnboardingCompleted()
+            let isOnboardingDone = await onboardingDone
+
+            await MainActor.run {
+                step = isOnboardingDone ? .root : .onboarding
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var paywallView: some View {
+        if purchaseManager.isRus {
+            APIPaywallView()
+                .environmentObject(purchaseManager)
+                .ignoresSafeArea()
+        } else {
+            PaywallView()
+                .environmentObject(purchaseManager)
+                .ignoresSafeArea()
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ClaudeApp.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+import Swinject
+
+@main
+struct ClaudeApp: App {
+
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    private let assembler = AppAssembler.make()
+    private var resolver: Resolver { assembler.resolver }
+
+    @Environment(\.scenePhase) private var scenePhase
+
+    // Новый billing-компонент (из демки)
+    @StateObject private var purchaseManager = PurchaseManager.shared
+
+#if DEBUG
+    @State private var showDebugRateUs: Bool = false
+    @State private var showDebugSettings: Bool = false
+#endif
+
+    init() {
+
+        ScreenScale.configure()
+
+        UIWindow.appearance().overrideUserInterfaceStyle = .light
+        UILabel.appearance().adjustsFontForContentSizeCategory = false
+        UITextView.appearance().adjustsFontForContentSizeCategory = false
+        UITextField.appearance().adjustsFontForContentSizeCategory = false
+
+        let resolver = self.resolver
+
+        // Прогрев не биллинга, а твоей "генерации" (pending jobs)
+        Task {
+            if let runner = resolver.resolve(PendingGenerationRecoveryRunner.self) {
+                await runner.runOnce()
+            }
+
+            if let scheduler = resolver.resolve(PendingGenerationPollingScheduler.self) {
+                await scheduler.startIfNeeded()
+            }
+
+#if DEBUG
+            if let counter = resolver.resolve(RequestCounterService.self) {
+                await counter.debugLogCurrentState(tag: "app_start")
+            }
+#endif
+        }
+    }
+
+    var body: some Scene {
+        WindowGroup {
+            AppFlowView()
+                .environment(\.resolver, resolver)
+                .environmentObject(purchaseManager)
+                .preferredColorScheme(.light)
+
+                .onChange(of: scenePhase) { phase in
+                    Task {
+                        guard let scheduler = resolver.resolve(PendingGenerationPollingScheduler.self) else { return }
+
+                        switch phase {
+                        case .active:
+                            await scheduler.startIfNeeded()
+
+                        case .background:
+                            await scheduler.stop()
+
+                        case .inactive:
+                            break
+
+                        @unknown default:
+                            break
+                        }
+                    }
+                }
+
+#if DEBUG
+                .fullScreenCover(isPresented: $showDebugRateUs) {
+                    RateUsView() { _ in }
+                        .ignoresSafeArea()
+                }
+                .fullScreenCover(isPresented: $showDebugSettings) {
+                    SettingsView()
+                        .environment(\.resolver, resolver)
+                        .ignoresSafeArea()
+                }
+#endif
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ServicesAssembly.swift
+////////////////////////////////////////////////////////////
+
+
+import Foundation
+import Swinject
+
+final class ServicesAssembly: Assembly {
+    func assemble(container: Container) {
+
+        container.register(EnglishPromptTranslating.self) { r in
+            EnglishPromptTranslatorImpl(
+                service: r.resolve(OpenAIChatService.self)!,
+                policy: r.resolve(OpenAIChatPollingPolicy.self)!
+            )
+        }
+        .inObjectScope(.container)
+
+        
+        // MARK: - Pending Generations Polling Scheduler (periodic reconcile)
+
+        container.register(PendingGenerationPollingScheduler.self) { r in
+            PendingGenerationPollingSchedulerImpl(
+                pendingService: r.resolve(PendingGenerationService.self)!,
+                runner: r.resolve(PendingGenerationRecoveryRunner.self)!,
+                intervalSeconds: 10
+            )
+        }
+        .inObjectScope(.container)
+
+        // MARK: - Generation Thread Updates (UI refresh bus)
+
+        container.register(GenerationThreadUpdateCenter.self) { _ in
+            GenerationThreadUpdateCenterImpl()
+        }
+        .inObjectScope(.container)
+
+        // MARK: - Pending Generations Recovery Runner
+
+        container.register(PendingGenerationRecoveryRunner.self) { r in
+            PendingGenerationRecoveryRunnerImpl(
+                pendingService: r.resolve(PendingGenerationService.self)!,
+                generationService: r.resolve(GenerationService.self)!,
+                historyRepo: r.resolve(GenerationHistoryRepository.self)!,
+                mediaCache: r.resolve(MediaCacheService.self)!,
+                internalNotifications: r.resolve(InternalNotificationCenter.self)!,
+                requestCounter: r.resolve(RequestCounterService.self)!,
+                updateCenter: r.resolve(GenerationThreadUpdateCenter.self)!,
+                maxConcurrent: 2
+            )
+        }
+        .inObjectScope(.container)
+
+        // MARK: - Pending Generations (Recovery)
+
+        container.register(PendingGenerationStore.self) { _ in
+            (try? PendingGenerationFileStore())
+            ?? (try! PendingGenerationFileStore(filename: "pending_generations_fallback_v1.json"))
+        }
+        .inObjectScope(.container)
+
+        container.register(PendingGenerationService.self) { r in
+            PendingGenerationServiceImpl(store: r.resolve(PendingGenerationStore.self)!)
+        }
+        .inObjectScope(.container)
+
+        // MARK: - Bot Profile (Settings)
+
+        container.register(BotProfileStore.self) { _ in
+            UserDefaultsBotProfileStore()
+        }
+        .inObjectScope(.container)
+
+        container.register(BotSettingsViewModel.self) { r in
+            MainActor.assumeIsolated {
+                BotSettingsViewModel(store: r.resolve(BotProfileStore.self)!)
+            }
+        }
+        .inObjectScope(.transient)
+
+        // MARK: - Internal Notifications (In-Memory)
+
+        container.register(InternalNotificationStore.self) { _ in
+            InMemoryInternalNotificationStore()
+        }
+        .inObjectScope(.container)
+
+        container.register(InternalNotificationCenter.self) { r in
+            InternalNotificationCenterImpl(
+                store: r.resolve(InternalNotificationStore.self)!
+            )
+        }
+        .inObjectScope(.container)
+
+        // MARK: - Onboarding
+
+        container.register(OnboardingStore.self) { _ in
+            OnboardingStoreImpl()
+        }
+
+        // MARK: - Request Counter (Usage)
+
+        container.register(RequestCounterStore.self) { _ in
+            (try? RequestCounterFileStore())
+            ?? (try! RequestCounterFileStore(filename: "request_counter_fallback_v1.json"))
+        }
+        .inObjectScope(.container)
+
+        container.register(RequestCounterService.self) { r in
+            RequestCounterServiceImpl(store: r.resolve(RequestCounterStore.self)!)
+        }
+        .inObjectScope(.container)
+
+        // MARK: - UseCases (AI Photo)
+
+        container.register(GenerateImageFromTextUseCase.self) { r in
+              let service = r.resolve(GenerationService.self)!
+              let counter = r.resolve(RequestCounterService.self)!
+              let translator = r.resolve(EnglishPromptTranslating.self)! // ✅ добавили
+
+              let policy = GenerateImageFromTextUseCase.Policy(
+                  maxWaitSeconds: 1000,
+                  scheduleSeconds: [2, 5, 7, 10, 15],
+                  repeatAfterScheduleSeconds: 10
+              )
+
+              return GenerateImageFromTextUseCase(
+                  service: service,
+                  translator: translator, // ✅ прокинули
+                  policy: policy,
+                  requestCounter: counter
+              )
+          }
+          .inObjectScope(.container)
+
+        container.register(PromptEditPhotoUseCase.self) { r in
+                   let service = r.resolve(GenerationService.self)!
+                   let counter = r.resolve(RequestCounterService.self)!
+                   let translator = r.resolve(EnglishPromptTranslating.self)!
+
+                   return PromptEditPhotoUseCaseImpl(
+                       service: service,
+                       translator: translator, 
+                       requestCounter: counter
+                   )
+               }
+               .inObjectScope(.container)
+
+        container.register(UpscalePhotoUseCase.self) { r in
+            let service = r.resolve(GenerationService.self)!
+            let counter = r.resolve(RequestCounterService.self)!
+            return UpscalePhotoUseCase(service: service, requestCounter: counter)
+        }
+        .inObjectScope(.container)
+
+        // MARK: - UseCases (Video)
+
+        container.register(GenerateVideoFromTextUseCase.self) { r in
+                let service = r.resolve(GenerationService.self)!
+                let counter = r.resolve(RequestCounterService.self)!
+                let translator = r.resolve(EnglishPromptTranslating.self)!
+                return GenerateVideoFromTextUseCaseImpl(
+                    service: service,
+                    translator: translator,
+                    requestCounter: counter
+                )
+            }
+            .inObjectScope(.container)
+
+        container.register(GenerateVideoFromPhotoUseCase.self) { r in
+            let service = r.resolve(GenerationService.self)!
+            let counter = r.resolve(RequestCounterService.self)!
+            return GenerateVideoFromPhotoUseCaseImpl(
+                service: service,
+                requestCounter: counter
+            )
+        }
+        .inObjectScope(.container)
+
+        container.register(GenerateVideoFromTwoPhotosUseCase.self) { r in
+            let service = r.resolve(GenerationService.self)!
+            let counter = r.resolve(RequestCounterService.self)!
+            return GenerateVideoFromTwoPhotosUseCaseImpl(
+                service: service,
+                requestCounter: counter
+            )
+        }
+        .inObjectScope(.container)
+
+        container.register(GetVideoTemplatesUseCase.self) { r in
+            let service = r.resolve(GenerationService.self)!
+            return GetVideoTemplatesUseCaseImpl(service: service)
+        }
+        .inObjectScope(.container)
+
+        // MARK: - Home
+
+        container.register(HomeViewModel.self) { r in
+            return MainActor.assumeIsolated {
+                HomeViewModel(
+                    useCase: r.resolve(GenerateImageFromTextUseCase.self)!,
+                    auth: r.resolve(AuthRepository.self)!,
+                    tokenStore: r.resolve(AccessTokenStore.self)!
+                )
+            }
+        }
+
+        // MARK: - AI Photo Backend (Networking / Auth / Generations)
+
+        container.register(APIConfig.self) { _ in
+            APIConfig(baseURL: URL(string: "https://aiphotoappfull.webberapp.shop")!)
+        }
+        .inObjectScope(.container)
+
+        container.register(HTTPClient.self) { _ in
+            URLSessionHTTPClient()
+        }
+        .inObjectScope(.container)
+
+        container.register(AccessTokenStore.self) { _ in
+            KeychainAccessTokenStore()
+        }
+        .inObjectScope(.container)
+
+        container.register(AuthRepository.self) { r in
+            AuthRepositoryImpl(
+                cfg: r.resolve(APIConfig.self)!,
+                http: r.resolve(HTTPClient.self)!,
+                tokenStore: r.resolve(AccessTokenStore.self)!
+            )
+        }
+        .inObjectScope(.container)
+
+        container.register(GenerationService.self) { r in
+            AIPhotoGenerationServiceImpl(
+                config: r.resolve(APIConfig.self)!,
+                http: r.resolve(HTTPClient.self)!,
+                tokenStore: r.resolve(AccessTokenStore.self)!,
+                auth: r.resolve(AuthRepository.self)!
+            )
+        }
+        .inObjectScope(.container)
+
+        container.register(ImageCache.self) { _ in
+            ImageCacheImpl()
+        }
+        .inObjectScope(.container)
+
+        // MARK: - OpenAI Chat
+
+        container.register(OpenAIChatPollingPolicy.self) { _ in
+            OpenAIChatPollingPolicy(
+                maxWaitSeconds: 1000,
+                scheduleSeconds: [1, 2, 3, 5, 8, 13],
+                repeatAfterScheduleSeconds: 10
+            )
+        }
+        .inObjectScope(.container)
+
+        container.register(OpenAIChatService.self) { r in
+            OpenAIChatServiceImpl(
+                config: r.resolve(APIConfig.self)!,
+                http: r.resolve(HTTPClient.self)!,
+                tokenStore: r.resolve(AccessTokenStore.self)!,
+                auth: r.resolve(AuthRepository.self)!
+            )
+        }
+        .inObjectScope(.container)
+
+        container.register(SendOpenAIChatMessageUseCase.self) { r in
+            SendOpenAIChatMessageUseCaseImpl(
+                service: r.resolve(OpenAIChatService.self)!,
+                policy: r.resolve(OpenAIChatPollingPolicy.self)!,
+                requestCounter: r.resolve(RequestCounterService.self)!
+            )
+        }
+        .inObjectScope(.container)
+
+        // MARK: - AIPhoto History
+
+        container.register(GenerationHistoryRepository.self) { _ in
+            GenerationHistoryRepositoryImpl(storage: .live())
+        }
+        .inObjectScope(.container)
+
+        container.register(MediaCacheService.self) { _ in
+            MediaCacheServiceImpl()
+        }
+        .inObjectScope(.container)
+
+        container.register(GenerationInputAttachmentStore.self) { _ in
+            GenerationInputAttachmentStore()
+        }
+        .inObjectScope(.container)
+
+        container.register(TemplateVideoCacheService.self) { _ in
+            TemplateVideoCacheServiceImpl()
+        }
+        .inObjectScope(.container)
+
+        container.register(TwoPhotosToVideoChatViewModel.self) { (r: Resolver, threadId: UUID?) in
+            MainActor.assumeIsolated {
+                TwoPhotosToVideoChatViewModel(
+                    threadId: threadId,
+                    useCase: r.resolve(GenerateVideoFromTwoPhotosUseCase.self)!,
+                    historyRepo: r.resolve(GenerationHistoryRepository.self)!,
+                    mediaCache: r.resolve(MediaCacheService.self)!,
+                    inputAttachmentStore: r.resolve(GenerationInputAttachmentStore.self)!,
+                    internalNotifications: r.resolve(InternalNotificationCenter.self)!,
+                    requestCounter: r.resolve(RequestCounterService.self)!,
+                    pendingService: r.resolve(PendingGenerationService.self)!,
+                    updateCenter: r.resolve(GenerationThreadUpdateCenter.self)!
+                )
+            }
+        }
+        .inObjectScope(.transient)
+
+        container.register(PhotoToVideoChatViewModel.self) { (r: Resolver, threadId: UUID?) in
+            MainActor.assumeIsolated {
+                PhotoToVideoChatViewModel(
+                    threadId: threadId,
+                    useCase: r.resolve(GenerateVideoFromPhotoUseCase.self)!,
+                    templatesService: r.resolve(GenerationService.self)!,
+                    historyRepo: r.resolve(GenerationHistoryRepository.self)!,
+                    mediaCache: r.resolve(MediaCacheService.self)!,
+                    templateVideoCache: r.resolve(TemplateVideoCacheService.self)!,
+                    internalNotifications: r.resolve(InternalNotificationCenter.self)!,
+                    requestCounter: r.resolve(RequestCounterService.self)!,
+                    pendingService: r.resolve(PendingGenerationService.self)!,
+                    updateCenter: r.resolve(GenerationThreadUpdateCenter.self)!
+                )
+            }
+        }
+        .inObjectScope(.transient)
+
+        container.register(TextToVideoChatViewModel.self) { (r: Resolver, threadId: UUID?) in
+            MainActor.assumeIsolated {
+                TextToVideoChatViewModel(
+                    threadId: threadId,
+                    useCase: r.resolve(GenerateVideoFromTextUseCase.self)!,
+                    historyRepo: r.resolve(GenerationHistoryRepository.self)!,
+                    mediaCache: r.resolve(MediaCacheService.self)!,
+                    internalNotifications: r.resolve(InternalNotificationCenter.self)!,
+                    requestCounter: r.resolve(RequestCounterService.self)!,
+                    pendingService: r.resolve(PendingGenerationService.self)!,
+                    updateCenter: r.resolve(GenerationThreadUpdateCenter.self)!
+                )
+            }
+        }
+        .inObjectScope(.transient)
+
+        container.register(TextToImageChatViewModel.self) { (r: Resolver, threadId: UUID?) in
+            MainActor.assumeIsolated {
+                TextToImageChatViewModel(
+                    threadId: threadId,
+                    useCase: r.resolve(GenerateImageFromTextUseCase.self)!,
+                    historyRepo: r.resolve(GenerationHistoryRepository.self)!,
+                    mediaCache: r.resolve(MediaCacheService.self)!,
+                    internalNotifications: r.resolve(InternalNotificationCenter.self)!,
+                    requestCounter: r.resolve(RequestCounterService.self)!,
+                    pendingService: r.resolve(PendingGenerationService.self)!,
+                    updateCenter: r.resolve(GenerationThreadUpdateCenter.self)!
+                )
+            }
+        }
+        .inObjectScope(.transient)
+
+        container.register(PhotoEditChatViewModel.self) { (r: Resolver, threadId: UUID?) in
+            MainActor.assumeIsolated {
+                PhotoEditChatViewModel(
+                    threadId: threadId,
+                    useCase: r.resolve(PromptEditPhotoUseCase.self)!,
+                    historyRepo: r.resolve(GenerationHistoryRepository.self)!,
+                    mediaCache: r.resolve(MediaCacheService.self)!,
+                    inputAttachmentStore: r.resolve(GenerationInputAttachmentStore.self)!,
+                    internalNotifications: r.resolve(InternalNotificationCenter.self)!,
+                    requestCounter: r.resolve(RequestCounterService.self)!,
+                    pendingService: r.resolve(PendingGenerationService.self)!,
+                    updateCenter: r.resolve(GenerationThreadUpdateCenter.self)!
+                )
+            }
+        }
+        .inObjectScope(.transient)
+
+        container.register(PhotoEnhanceChatViewModel.self) { (r: Resolver, threadId: UUID?) in
+            MainActor.assumeIsolated {
+                PhotoEnhanceChatViewModel(
+                    threadId: threadId,
+                    useCase: r.resolve(UpscalePhotoUseCase.self)!,
+                    historyRepo: r.resolve(GenerationHistoryRepository.self)!,
+                    mediaCache: r.resolve(MediaCacheService.self)!,
+                    internalNotifications: r.resolve(InternalNotificationCenter.self)!,
+                    requestCounter: r.resolve(RequestCounterService.self)!,
+                    pendingService: r.resolve(PendingGenerationService.self)!,
+                    updateCenter: r.resolve(GenerationThreadUpdateCenter.self)!
+                )
+            }
+        }
+        .inObjectScope(.transient)
+
+        // MARK: - Chat History
+
+        container.register(ChatHistoryRepository.self) { _ in
+            ChatHistoryRepositoryImpl(storage: .live())
+        }
+        .inObjectScope(.container)
+
+        container.register(ObserveChatThreadsUseCase.self) { r in
+            ObserveChatThreadsUseCaseImpl(repository: r.resolve(ChatHistoryRepository.self)!)
+        }
+        .inObjectScope(.container)
+
+        container.register(UpsertChatThreadUseCase.self) { r in
+            UpsertChatThreadUseCaseImpl(repository: r.resolve(ChatHistoryRepository.self)!)
+        }
+        .inObjectScope(.container)
+
+        container.register(GetChatThreadUseCase.self) { r in
+            GetChatThreadUseCaseImpl(repository: r.resolve(ChatHistoryRepository.self)!)
+        }
+        .inObjectScope(.container)
+
+        container.register(RenameChatThreadUseCase.self) { r in
+            RenameChatThreadUseCaseImpl(repository: r.resolve(ChatHistoryRepository.self)!)
+        }
+        .inObjectScope(.container)
+
+        container.register(DeleteChatThreadUseCase.self) { r in
+            DeleteChatThreadUseCaseImpl(repository: r.resolve(ChatHistoryRepository.self)!)
+        }
+        .inObjectScope(.container)
+
+        container.register(ChatHistoryListViewModel.self) { r in
+            MainActor.assumeIsolated {
+                ChatHistoryListViewModel(
+                    observeUseCase: r.resolve(ObserveChatThreadsUseCase.self)!
+                )
+            }
+        }
+        .inObjectScope(.transient)
+
+        container.register(OpenAITextChatViewModel.self) { r in
+            MainActor.assumeIsolated {
+                OpenAITextChatViewModel(
+                    useCase: r.resolve(SendOpenAIChatMessageUseCase.self)!,
+                    imageBuilder: r.resolve(ImageAttachmentBuilder.self) ?? ImageAttachmentBuilder(),
+                    fileBuilder: r.resolve(FileAttachmentBuilder.self) ?? FileAttachmentBuilder(),
+                    chatService: r.resolve(OpenAIChatService.self),
+                    upsertThreadUseCase: r.resolve(UpsertChatThreadUseCase.self),
+                    getThreadUseCase: r.resolve(GetChatThreadUseCase.self),
+                    speechService: r.resolve(SpeechToTextService.self)!,
+                    internalNotifications: r.resolve(InternalNotificationCenter.self)!,
+                    botProfileStore: r.resolve(BotProfileStore.self)!
+                )
+            }
+        }
+        .inObjectScope(.transient)
+
+        // MARK: - Unified History
+
+        container.register(UnifiedHistoryRepository.self) { r in
+            UnifiedHistoryRepositoryImpl(
+                chatRepo: r.resolve(ChatHistoryRepository.self)!,
+                genRepo: r.resolve(GenerationHistoryRepository.self)!
+            )
+        }
+        .inObjectScope(.container)
+
+        container.register(ObserveUnifiedThreadsUseCase.self) { r in
+            ObserveUnifiedThreadsUseCaseImpl(
+                repository: r.resolve(UnifiedHistoryRepository.self)!
+            )
+        }
+        .inObjectScope(.container)
+
+        container.register(UnifiedHistoryListViewModel.self) { r in
+            MainActor.assumeIsolated {
+                UnifiedHistoryListViewModel(
+                    observeUseCase: r.resolve(ObserveUnifiedThreadsUseCase.self)!,
+                    deleteChatThreadUseCase: r.resolve(DeleteChatThreadUseCase.self)!,
+                    renameChatThreadUseCase: r.resolve(RenameChatThreadUseCase.self)!,
+                    getChatThreadUseCase: r.resolve(GetChatThreadUseCase.self)!,
+                    upsertChatThreadUseCase: r.resolve(UpsertChatThreadUseCase.self)!,
+                    genRepo: r.resolve(GenerationHistoryRepository.self)!,
+                    mediaCache: r.resolve(MediaCacheService.self)!
+                )
+            }
+        }
+        .inObjectScope(.transient)
+
+        container.register(GenerationHistoryListViewModel.self) { r in
+            MainActor.assumeIsolated {
+                GenerationHistoryListViewModel(
+                    repo: r.resolve(GenerationHistoryRepository.self)!,
+                    mediaCache: r.resolve(MediaCacheService.self)!
+                )
+            }
+        }
+        .inObjectScope(.transient)
+
+        // MARK: - Speech To Text (Apple)
+
+        container.register(SpeechToTextService.self) { _ in
+            MainActor.assumeIsolated {
+                SpeechToTextServiceImpl()
+            }
+        }
+        .inObjectScope(.container)
+    }
+}
+
+

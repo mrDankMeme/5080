@@ -1,0 +1,1375 @@
+////////////////////////////////////////////////////////////
+// FILE: APIWalls/APIAvatarsPaywallView.swift
+////////////////////////////////////////////////////////////
+
+/// Paywall для отображения аватаров через кастомный API
+///
+/// Используется для русских пользователей (isRus = true) вместо стандартного AvatarsPaywallView.
+/// Отображает список продуктов-аватаров (не подписок), полученных из API, отсортированных по возрастанию цены.
+/// Фильтрует продукты по наличию слова "avatar" в названии.
+/// При нажатии на кнопку оплаты открывает HTML страницу оплаты через CloudPayments.
+/// После успешной оплаты автоматически добавляет купленные аватары в PurchaseManager.
+import SwiftUI
+
+struct APIAvatarsPaywallView: View {
+    @EnvironmentObject var purchaseManager: PurchaseManager
+    @Environment(\.dismiss) private var dismiss
+    
+    @State private var products: [PaymentProduct] = []
+    @State private var pickedProductID: String?
+    @State private var isLoading: Bool = false
+    @State private var showPaymentHTML: Bool = false
+    @State private var paymentHTML: String?
+    @State private var showErrorAlert: Bool = false
+    @State private var localError: String?
+    
+    private var pickedProduct: PaymentProduct? {
+        products.first(where: { $0.id == pickedProductID })
+    }
+    
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            productsPart
+            payButton
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .overlay(alignment: .topTrailing) {
+            if !isLoading {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                }
+                .padding()
+            }
+        }
+        .overlay {
+            if isLoading {
+                ProgressView()
+                    .tint(Color.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black.opacity(0.3))
+            }
+        }
+        .alert("Error", isPresented: $showErrorAlert) {
+            Button("Ok", role: .cancel) {
+                localError = nil
+                purchaseManager.purchaseError = nil
+            }
+        } message: {
+            Text(localError ?? purchaseManager.purchaseError ?? "Unknown error")
+        }
+        .onAppear {
+            loadProductsIfNeeded()
+            
+            if purchaseManager.purchaseError != nil {
+                showErrorAlert = true
+            }
+        }
+        .onChange(of: purchaseManager.purchaseError != nil) { _, newValue in
+            if newValue { showErrorAlert = true }
+        }
+        .animation(.easeInOut(duration: 0.2), value: isLoading)
+        .fullScreenCover(isPresented: $showPaymentHTML) {
+            if let html = paymentHTML {
+                PaymentHTMLView(html: html, productType: .avatars, productId: pickedProduct?.id)
+            }
+        }
+    }
+    
+    private var payButton: some View {
+        Button {
+            guard let product = pickedProduct else { return }
+            Task {
+                await openPayment(for: product)
+            }
+        } label: {
+            Text("Buy avatars")
+                .foregroundStyle(Color.white)
+                .font(.system(size: 15, weight: .medium))
+                .padding(.vertical, 19.5)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(pickedProduct == nil || isLoading
+                              ? Color.gray.opacity(0.5)
+                              : Color.blue)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .disabled(pickedProduct == nil || isLoading)
+    }
+    
+    private var productsPart: some View {
+        VStack(spacing: 8) {
+            if products.isEmpty && isLoading {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(Color.white)
+                        .scaleEffect(1.5)
+                    
+                    if let error = purchaseManager.purchaseError ?? localError {
+                        Text(error)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Color.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                    }
+                }
+                .padding(.vertical, 32)
+            } else {
+                ForEach(products) { product in
+                    Button {
+                        pickedProductID = product.id
+                    } label: {
+                        productCard(product: product, isPicked: pickedProductID == product.id)
+                    }
+                    .onAppear {
+                        if pickedProductID == nil {
+                            pickedProductID = product.id
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func productCard(product: PaymentProduct, isPicked: Bool) -> some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: isPicked ? "checkmark.circle" : "circle")
+                    .resizable()
+                    .renderingMode(.template)
+                    .foregroundStyle(isPicked ? Color.white : Color.white.opacity(0.3))
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 24, height: 24)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(product.name)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                    
+                    Text("\(product.price) ₽")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Color.white.opacity(0.7))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 73)
+        .overlay {
+            if isPicked {
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(Color.white, lineWidth: 2)
+                    .padding(1)
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: isPicked)
+        .contentShape(RoundedRectangle(cornerRadius: 20))
+    }
+    
+    private func loadProductsIfNeeded() {
+        guard products.isEmpty else { return }
+        isLoading = true
+        
+        Task {
+            do {
+                let bundle = Bundle.main.bundleIdentifier ?? "com.zaf.5026vide0"
+                let all = try await APIPaymentManager.shared.fetchProducts(appBundle: bundle)
+                let avatars = all.filter { !$0.isSubscription && $0.name.lowercased().contains("avatar") }.sorted { $0.price < $1.price }
+                await MainActor.run {
+                    self.products = avatars
+                    self.isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.localError = error.localizedDescription
+                    self.isLoading = false
+                    self.showErrorAlert = true
+                }
+            }
+        }
+    }
+    
+    @MainActor
+    private func openPayment(for product: PaymentProduct) async {
+        isLoading = true
+        do {
+            let bundle = Bundle.main.bundleIdentifier ?? "com.zaf.5026vide0"
+            let html = try await APIPaymentManager.shared.fetchPaywallHTML(
+                userId: purchaseManager.userId,
+                appBundle: bundle,
+                productApphudId: product.apphudId
+            )
+            self.paymentHTML = html
+            self.isLoading = false
+            self.showPaymentHTML = true
+        } catch {
+            self.localError = error.localizedDescription
+            self.isLoading = false
+            self.showErrorAlert = true
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIWalls/APIPaywallView.swift
+////////////////////////////////////////////////////////////
+
+/// Paywall для отображения подписок через кастомный API
+///
+/// Используется для русских пользователей (isRus = true) вместо стандартного PaywallView.
+/// Отображает список продуктов-подписок, полученных из API, отсортированных по возрастанию цены.
+/// При нажатии на кнопку оплаты открывает HTML страницу оплаты через CloudPayments.
+/// После успешной оплаты автоматически обновляет статус подписки в PurchaseManager.
+import SwiftUI
+
+struct APIPaywallView: View {
+    @EnvironmentObject var purchaseManager: PurchaseManager
+    @Environment(\.dismiss) private var dismiss
+    
+    @State private var products: [PaymentProduct] = []
+    @State private var pickedProductID: String?
+    @State private var isLoading: Bool = false
+    @State private var showPaymentHTML: Bool = false
+    @State private var paymentHTML: String?
+    @State private var showErrorAlert: Bool = false
+    @State private var localError: String?
+    
+    private var pickedProduct: PaymentProduct? {
+        products.first(where: { $0.id == pickedProductID })
+    }
+    
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            productsPart
+            payButton
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .overlay(alignment: .topTrailing) {
+            if !isLoading {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                }
+                .padding()
+            }
+        }
+        .overlay {
+            if isLoading {
+                ProgressView()
+                    .tint(Color.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black.opacity(0.3))
+            }
+        }
+        .alert("Error", isPresented: $showErrorAlert) {
+            Button("Ok", role: .cancel) {
+                localError = nil
+                purchaseManager.purchaseError = nil
+            }
+        } message: {
+            Text(localError ?? purchaseManager.purchaseError ?? "Unknown error")
+        }
+        .onAppear {
+            loadProductsIfNeeded()
+            
+            if purchaseManager.purchaseError != nil {
+                showErrorAlert = true
+            }
+        }
+        .onChange(of: purchaseManager.purchaseError != nil) { _, newValue in
+            if newValue { showErrorAlert = true }
+        }
+        .animation(.easeInOut(duration: 0.2), value: isLoading)
+        .fullScreenCover(isPresented: $showPaymentHTML) {
+            if let html = paymentHTML {
+                PaymentHTMLView(html: html, productType: .subscription, productId: pickedProduct?.id)
+            }
+        }
+    }
+    
+    private var payButton: some View {
+        Button {
+            guard let product = pickedProduct else { return }
+            Task {
+                await openPayment(for: product)
+            }
+        } label: {
+            Text("Continue")
+                .foregroundStyle(Color.white)
+                .font(.system(size: 15, weight: .medium))
+                .padding(.vertical, 19.5)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(pickedProduct == nil || isLoading
+                              ? Color.gray.opacity(0.5)
+                              : Color.blue)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .disabled(pickedProduct == nil || isLoading)
+    }
+    
+    private var productsPart: some View {
+        VStack(spacing: 8) {
+            if products.isEmpty && isLoading {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(Color.white)
+                        .scaleEffect(1.5)
+                    
+                    if let error = purchaseManager.purchaseError ?? localError {
+                        Text(error)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Color.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                    }
+                }
+                .padding(.vertical, 32)
+            } else {
+                ForEach(products) { product in
+                    Button {
+                        pickedProductID = product.id
+                    } label: {
+                        productCard(product: product, isPicked: pickedProductID == product.id)
+                    }
+                    .onAppear {
+                        if pickedProductID == nil {
+                            pickedProductID = product.id
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func productCard(product: PaymentProduct, isPicked: Bool) -> some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: isPicked ? "checkmark.circle" : "circle")
+                    .resizable()
+                    .renderingMode(.template)
+                    .foregroundStyle(isPicked ? Color.white : Color.white.opacity(0.3))
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 24, height: 24)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(product.name)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                    
+                    if product.isSubscription,
+                       let interval = product.subscriptionInterval,
+                       let period = product.subscriptionPeriod {
+                        Text("\(period) \(interval.lowercased())")
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(Color.white.opacity(0.7))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                
+                Text("\(product.price) ₽")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color.white)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 73)
+        .overlay {
+            if isPicked {
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(Color.white, lineWidth: 2)
+                    .padding(1)
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: isPicked)
+        .contentShape(RoundedRectangle(cornerRadius: 20))
+    }
+    
+    private func loadProductsIfNeeded() {
+        guard products.isEmpty else { return }
+        isLoading = true
+        
+        Task {
+            do {
+                let bundle = Bundle.main.bundleIdentifier ?? "com.zaf.5026vide0"
+                let all = try await APIPaymentManager.shared.fetchProducts(appBundle: bundle)
+                let subs = all.filter { $0.isSubscription }.sorted { $0.price < $1.price }
+                await MainActor.run {
+                    self.products = subs
+                    self.isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.localError = error.localizedDescription
+                    self.isLoading = false
+                    self.showErrorAlert = true
+                }
+            }
+        }
+    }
+    
+    @MainActor
+    private func openPayment(for product: PaymentProduct) async {
+        isLoading = true
+        do {
+            let bundle = Bundle.main.bundleIdentifier ?? "com.zaf.5026vide0"
+            let html = try await APIPaymentManager.shared.fetchPaywallHTML(
+                userId: purchaseManager.userId,
+                appBundle: bundle,
+                productApphudId: product.apphudId
+            )
+            self.paymentHTML = html
+            self.isLoading = false
+            self.showPaymentHTML = true
+        } catch {
+            self.localError = error.localizedDescription
+            self.isLoading = false
+            self.showErrorAlert = true
+        }
+    }
+}
+
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIWalls/APITokensPaywallView.swift
+////////////////////////////////////////////////////////////
+
+/// Paywall для отображения токенов через кастомный API
+///
+/// Используется для русских пользователей (isRus = true) вместо стандартного TokensPaywallView.
+/// Отображает список продуктов-токенов (не подписок), полученных из API, отсортированных по возрастанию цены.
+/// Фильтрует продукты по наличию слова "token" в названии.
+/// При нажатии на кнопку оплаты открывает HTML страницу оплаты через CloudPayments.
+/// После успешной оплаты автоматически добавляет купленные токены в PurchaseManager.
+import SwiftUI
+
+struct APITokensPaywallView: View {
+    @EnvironmentObject var purchaseManager: PurchaseManager
+    @Environment(\.dismiss) private var dismiss
+    
+    @State private var products: [PaymentProduct] = []
+    @State private var pickedProductID: String?
+    @State private var isLoading: Bool = false
+    @State private var showPaymentHTML: Bool = false
+    @State private var paymentHTML: String?
+    @State private var showErrorAlert: Bool = false
+    @State private var localError: String?
+    
+    private var pickedProduct: PaymentProduct? {
+        products.first(where: { $0.id == pickedProductID })
+    }
+    
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            productsPart
+            payButton
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .overlay(alignment: .topTrailing) {
+            if !isLoading {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                }
+                .padding()
+            }
+        }
+        .overlay {
+            if isLoading {
+                ProgressView()
+                    .tint(Color.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black.opacity(0.3))
+            }
+        }
+        .alert("Error", isPresented: $showErrorAlert) {
+            Button("Ok", role: .cancel) {
+                localError = nil
+                purchaseManager.purchaseError = nil
+            }
+        } message: {
+            Text(localError ?? purchaseManager.purchaseError ?? "Unknown error")
+        }
+        .onAppear {
+            loadProductsIfNeeded()
+            
+            if purchaseManager.purchaseError != nil {
+                showErrorAlert = true
+            }
+        }
+        .onChange(of: purchaseManager.purchaseError != nil) { _, newValue in
+            if newValue { showErrorAlert = true }
+        }
+        .animation(.easeInOut(duration: 0.2), value: isLoading)
+        .fullScreenCover(isPresented: $showPaymentHTML) {
+            if let html = paymentHTML {
+                PaymentHTMLView(html: html, productType: .tokens, productId: pickedProduct?.id)
+            }
+        }
+    }
+    
+    private var payButton: some View {
+        Button {
+            guard let product = pickedProduct else { return }
+            Task {
+                await openPayment(for: product)
+            }
+        } label: {
+            Text("Buy tokens")
+                .foregroundStyle(Color.white)
+                .font(.system(size: 15, weight: .medium))
+                .padding(.vertical, 19.5)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(pickedProduct == nil || isLoading
+                              ? Color.gray.opacity(0.5)
+                              : Color.blue)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .disabled(pickedProduct == nil || isLoading)
+    }
+    
+    private var productsPart: some View {
+        VStack(spacing: 8) {
+            if products.isEmpty && isLoading {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(Color.white)
+                        .scaleEffect(1.5)
+                    
+                    if let error = purchaseManager.purchaseError ?? localError {
+                        Text(error)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Color.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                    }
+                }
+                .padding(.vertical, 32)
+            } else {
+                ForEach(products) { product in
+                    Button {
+                        pickedProductID = product.id
+                    } label: {
+                        productCard(product: product, isPicked: pickedProductID == product.id)
+                    }
+                    .onAppear {
+                        if pickedProductID == nil {
+                            pickedProductID = product.id
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func productCard(product: PaymentProduct, isPicked: Bool) -> some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: isPicked ? "checkmark.circle" : "circle")
+                    .resizable()
+                    .renderingMode(.template)
+                    .foregroundStyle(isPicked ? Color.white : Color.white.opacity(0.3))
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 24, height: 24)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(product.name)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                    
+                    Text("\(product.price) ₽")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Color.white.opacity(0.7))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 73)
+        .overlay {
+            if isPicked {
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(Color.white, lineWidth: 2)
+                    .padding(1)
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: isPicked)
+        .contentShape(RoundedRectangle(cornerRadius: 20))
+    }
+    
+    private func loadProductsIfNeeded() {
+        guard products.isEmpty else { return }
+        isLoading = true
+        
+        Task {
+            do {
+                let bundle = Bundle.main.bundleIdentifier ?? "com.zaf.5026vide0"
+                let all = try await APIPaymentManager.shared.fetchProducts(appBundle: bundle)
+                let tokens = all.filter { !$0.isSubscription && $0.name.lowercased().contains("token") }.sorted { $0.price < $1.price }
+                await MainActor.run {
+                    self.products = tokens
+                    self.isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.localError = error.localizedDescription
+                    self.isLoading = false
+                    self.showErrorAlert = true
+                }
+            }
+        }
+    }
+    
+    @MainActor
+    private func openPayment(for product: PaymentProduct) async {
+        isLoading = true
+        do {
+            let bundle = Bundle.main.bundleIdentifier ?? "com.zaf.5026vide0"
+            let html = try await APIPaymentManager.shared.fetchPaywallHTML(
+                userId: purchaseManager.userId,
+                appBundle: bundle,
+                productApphudId: product.apphudId
+            )
+            self.paymentHTML = html
+            self.isLoading = false
+            self.showPaymentHTML = true
+        } catch {
+            self.localError = error.localizedDescription
+            self.isLoading = false
+            self.showErrorAlert = true
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: APIWalls/PaymentHTMLView.swift
+////////////////////////////////////////////////////////////
+
+/// Вью для отображения HTML страницы оплаты через CloudPayments
+///
+/// Отображает веб-страницу оплаты, полученную из API, в WKWebView.
+/// При открытии запускает проверку транзакций каждые 5 секунд для отслеживания успешных покупок.
+/// После закрытия экрана продолжает проверку еще 30 секунд, затем останавливается.
+/// Автоматически обрабатывает покупки и обновляет соответствующие значения в PurchaseManager:
+/// - Для подписок: обновляет isSubscribed
+/// - Для токенов: добавляет купленные токены
+/// - Для аватаров: добавляет купленные аватары
+import SwiftUI
+import WebKit
+
+struct PaymentHTMLView: View {
+    let html: String
+    let productType: ProductType
+    let productId: String?
+    @EnvironmentObject var purchaseManager: PurchaseManager
+    @Environment(\.dismiss) private var dismiss
+    
+    init(html: String, productType: ProductType = .subscription, productId: String? = nil) {
+        self.html = html
+        self.productType = productType
+        self.productId = productId
+    }
+    
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            HTMLWebView(html: html)
+                .ignoresSafeArea()
+            
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Color.white)
+                    .padding()
+                    .background(Color.black.opacity(0.4))
+                    .clipShape(Circle())
+            }
+            .padding()
+        }
+        .background(Color.black.ignoresSafeArea())
+        .onAppear {
+            purchaseManager.startPurchasePolling(productType: productType, productId: productId)
+        }
+        .onDisappear {
+            purchaseManager.notifyPaymentScreenClosed()
+        }
+    }
+}
+
+struct HTMLWebView: UIViewRepresentable {
+    let html: String
+    
+    func makeUIView(context: Context) -> WKWebView {
+        let webView = WKWebView()
+        webView.backgroundColor = .black
+        webView.scrollView.backgroundColor = .black
+        return webView
+    }
+    
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        uiView.loadHTMLString(html, baseURL: nil)
+    }
+}
+
+
+
+////////////////////////////////////////////////////////////
+// FILE: ContentView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct ContentView: View {
+    @EnvironmentObject var purchaseManager: PurchaseManager
+    @State private var showSubPaywall: Bool = false
+    @State private var showTokPaywall: Bool = false
+    @State private var showAvaPaywall: Bool = false
+    
+    var body: some View {
+        VStack {
+            Text("Rus: \(purchaseManager.isRus)")
+            Text("Sub: \(purchaseManager.isSubscribed)")
+            Text("Tokens: \(purchaseManager.tokens)")
+            Text("Avatars: \(purchaseManager.avatars)")
+            
+            Button {
+                showSubPaywall = true
+            } label: {
+                Text("Show subs")
+            }
+            .buttonStyle(.borderedProminent)
+            
+            if purchaseManager.isSubscribed {
+                Button {
+                    showTokPaywall = true
+                } label: {
+                    Text("Show tokens")
+                }
+                .buttonStyle(.borderedProminent)
+                
+                Button {
+                    showAvaPaywall = true
+                } label: {
+                    Text("Show avatars")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding()
+        
+        .fullScreenCover(isPresented: $showSubPaywall) {
+            if purchaseManager.isRus {
+                APIPaywallView()
+            } else {
+                PaywallView()
+            }
+        }
+        .fullScreenCover(isPresented: $showTokPaywall) {
+            if purchaseManager.isRus {
+                APITokensPaywallView()
+            } else {
+                TokensPaywallView()
+            }
+        }
+        .fullScreenCover(isPresented: $showAvaPaywall) {
+            if purchaseManager.isRus {
+                APIAvatarsPaywallView()
+            } else {
+                AvatarsPaywallView()
+            }
+        }
+    }
+}
+
+#Preview {
+    ContentView()
+        .environmentObject(PurchaseManager.shared)
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: LaunchView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct LaunchView: View {
+    var body: some View {
+        ProgressView()
+            .scaleEffect(2)
+    }
+}
+
+#Preview {
+    LaunchView()
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: Walls/AvatarsPaywallView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+import ApphudSDK
+
+struct AvatarsPaywallView: View {
+    @EnvironmentObject var purchaseManager: PurchaseManager
+    @Environment(\.dismiss) var dismiss
+    
+    @State private var pickedProd: ApphudProduct?
+    @State private var showErrorAlert: Bool = false
+    
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            productsPart
+            subButton
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .overlay(alignment: .topTrailing) {
+            if !purchaseManager.isLoading {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                }
+                .padding()
+            }
+        }
+        .overlay {
+            if purchaseManager.isLoading {
+                ProgressView()
+                    .tint(Color.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black.opacity(0.3))
+            }
+        }
+        .alert("Error", isPresented: $showErrorAlert, actions: {
+            Button("Ok", role: .cancel) {
+                purchaseManager.failRestoreText = nil
+                purchaseManager.purchaseError = nil
+            }
+        }, message: {
+            Text(purchaseManager.purchaseError ?? purchaseManager.failRestoreText ?? "")
+        })
+        .onAppear {
+            if purchaseManager.purchaseError != nil || purchaseManager.failRestoreText != nil {
+                showErrorAlert = true
+            }
+        }
+        .onChange(of: purchaseManager.failRestoreText != nil) { _, newValue in
+            if newValue { showErrorAlert = true }
+        }
+        .onChange(of: purchaseManager.purchaseError != nil) { _, newValue in
+            if newValue { showErrorAlert = true }
+        }
+        .animation(.easeInOut(duration: 0.2), value: purchaseManager.isLoading)
+    }
+    
+    private var subButton: some View {
+        Button {
+            guard let pickedProd else { return }
+            
+            purchaseManager.makePurchase(product: pickedProd) { success, _ in
+                if success {
+                    dismiss()
+                }
+            }
+        } label: {
+            Text("Buy avatars")
+                .foregroundStyle(Color.white)
+                .font(.system(size: 15, weight: .medium))
+                .padding(.vertical, 19.5)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(pickedProd == nil || purchaseManager.isLoading
+                              ? Color.gray.opacity(0.5)
+                              : Color.blue)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .disabled(pickedProd == nil || purchaseManager.isLoading)
+    }
+    
+    private var productsPart: some View {
+        VStack(spacing: 8) {
+            if purchaseManager.avatarsProducts.isEmpty {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(Color.white)
+                        .scaleEffect(1.5)
+                    
+                    if let error = purchaseManager.purchaseError {
+                        Text(error)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Color.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                    }
+                }
+                .padding(.vertical, 32)
+            } else {
+                ForEach(purchaseManager.avatarsProducts, id: \.productId) { product in
+                    Button {
+                        pickedProd = product
+                    } label: {
+                        productCard(prod: product, isPicked: pickedProd == product)
+                    }
+                    .onAppear {
+                        if pickedProd == nil || (pickedProd?.price ?? 0) > product.price {
+                            pickedProd = product
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func productCard(prod: ApphudProduct, isPicked: Bool) -> some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: isPicked ? "checkmark.circle" : "circle")
+                    .resizable()
+                    .renderingMode(.template)
+                    .foregroundStyle(isPicked ? Color.white : Color.white.opacity(0.3))
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 24, height: 24)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(prod.productId)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                    
+                    Text(prod.localizedPrice)
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Color.white.opacity(0.7))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 73)
+        .overlay {
+            if isPicked {
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(Color.white, lineWidth: 2)
+                    .padding(1)
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: isPicked)
+        .contentShape(RoundedRectangle(cornerRadius: 20))
+    }
+}
+
+#Preview {
+    AvatarsPaywallView()
+        .environmentObject(PurchaseManager.shared)
+}
+
+
+
+////////////////////////////////////////////////////////////
+// FILE: Walls/PaywallView.swift
+////////////////////////////////////////////////////////////
+
+import ApphudSDK
+import SwiftUI
+
+struct PaywallView: View {
+    @EnvironmentObject var purchaseManager: PurchaseManager
+    @Environment(\.dismiss) var dismiss
+    @Environment(\.openURL) var openURL
+    
+    @State private var pickedProd: ApphudProduct?
+    
+    @State private var showErrorAlert: Bool = false
+    
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            productsPart
+            subButton
+        }
+        .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black)
+        
+            .overlay(alignment: .topTrailing, content: {
+                if !purchaseManager.isLoading {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(Color.white)
+                    }
+                    .padding()
+                }
+            })
+        
+            .overlay {
+                if purchaseManager.isLoading {
+                    ProgressView()
+                        .tint(Color.white)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.black.opacity(0.3))
+                }
+            }
+        
+            .alert("Error", isPresented: $showErrorAlert, actions: {
+                Button("Ok", role: .cancel) {
+                    purchaseManager.failRestoreText = nil
+                    purchaseManager.purchaseError = nil
+                }
+            }, message: {
+                Text(purchaseManager.purchaseError ?? purchaseManager.failRestoreText ?? "")
+            })
+            .onAppear {
+                if purchaseManager.purchaseError != nil || purchaseManager.failRestoreText != nil {
+                    showErrorAlert = true
+                }
+            }
+            .onChange(of: purchaseManager.failRestoreText != nil) { _, newValue in
+                if newValue { showErrorAlert = true }
+            }
+            .onChange(of: purchaseManager.purchaseError != nil) { _, newValue in
+                if newValue { showErrorAlert = true }
+            }
+        
+            .animation(.easeInOut(duration: 0.2), value: purchaseManager.isLoading)
+    }
+    
+    var subButton: some View {
+        Button {
+            guard let pickedProd else { return }
+            
+            purchaseManager.makePurchase(product: pickedProd, completion: { success, errorMessage in
+                if success {
+                    dismiss()
+                }
+            })
+        } label: {
+            Text("Continue")
+                .foregroundStyle(Color.white)
+                .font(.system(size: 15, weight: .medium))
+                .padding(.vertical, 19.5)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(pickedProd == nil || !purchaseManager.isReady || purchaseManager.isLoading ? Color.gray.opacity(0.5) : Color.blue)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .disabled(pickedProd == nil || !purchaseManager.isReady || purchaseManager.isLoading)
+    }
+    
+    var productsPart: some View {
+        VStack(spacing: 8) {
+            if purchaseManager.purchaseState == .loading || purchaseManager.products.isEmpty {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(Color.white)
+                        .scaleEffect(1.5)
+                    
+                    if let error = purchaseManager.purchaseError {
+                        Text(error)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Color.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                    }
+                }
+                .padding(.vertical, 32)
+            } else {
+                ForEach(purchaseManager.products, id: \.productId) { product in
+                    Button {
+                        pickedProd = product
+                    } label: {
+                        productCard(prod: product, isPicked: pickedProd == product)
+                    }
+                    .onAppear {
+                        if pickedProd == nil || (pickedProd?.price ?? 0) > product.price {
+                            pickedProd = product
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    @ViewBuilder
+    func productCard(prod: ApphudProduct, isPicked: Bool) -> some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: isPicked ? "checkmark.circle" : "circle")
+                    .resizable()
+                    .renderingMode(.template)
+                    .foregroundStyle(isPicked ? Color.white : Color.white.opacity(0.3))
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 24, height: 24)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(prod.timeString.capitalizingFirstLetter() + "ly")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                    
+                    if prod.timeString.lowercased() != "week" {
+                        Text(prod.localizedPriceWeek + " / week")
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(Color.white.opacity(0.7))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                
+                Text(prod.localizedPrice + " / \(prod.timeString.lowercased())")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color.white)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 73)
+        .overlay(content: {
+            if isPicked {
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(Color.white, lineWidth: 2)
+                    .padding(1)
+            }
+        })
+        .animation(.snappy(duration: 0.2), value: isPicked)
+        .contentShape(RoundedRectangle(cornerRadius: 20))
+        .overlay(alignment: .topTrailing) {
+            if prod.timeString.lowercased() != "week" {
+                Text("Popular")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(Color.blue)
+                    )
+                    .offset(x: -16, y: -5)
+            }
+        }
+    }
+}
+
+#Preview {
+    PaywallView()
+        .environmentObject(PurchaseManager.shared)
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: Walls/TokensPaywallView.swift
+////////////////////////////////////////////////////////////
+
+import ApphudSDK
+import SwiftUI
+
+struct TokensPaywallView: View {
+    @EnvironmentObject var purchaseManager: PurchaseManager
+    @Environment(\.dismiss) var dismiss
+    
+    @State private var pickedProd: ApphudProduct?
+    @State private var showErrorAlert: Bool = false
+    
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            productsPart
+            subButton
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .overlay(alignment: .topTrailing) {
+            if !purchaseManager.isLoading {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                }
+                .padding()
+            }
+        }
+        .overlay {
+            if purchaseManager.isLoading {
+                ProgressView()
+                    .tint(Color.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black.opacity(0.3))
+            }
+        }
+        .alert("Error", isPresented: $showErrorAlert, actions: {
+            Button("Ok", role: .cancel) {
+                purchaseManager.failRestoreText = nil
+                purchaseManager.purchaseError = nil
+            }
+        }, message: {
+            Text(purchaseManager.purchaseError ?? purchaseManager.failRestoreText ?? "")
+        })
+        .onAppear {
+            if purchaseManager.purchaseError != nil || purchaseManager.failRestoreText != nil {
+                showErrorAlert = true
+            }
+        }
+        .onChange(of: purchaseManager.failRestoreText != nil) { _, newValue in
+            if newValue { showErrorAlert = true }
+        }
+        .onChange(of: purchaseManager.purchaseError != nil) { _, newValue in
+            if newValue { showErrorAlert = true }
+        }
+        .animation(.easeInOut(duration: 0.2), value: purchaseManager.isLoading)
+    }
+    
+    private var subButton: some View {
+        Button {
+            guard let pickedProd else { return }
+            
+            purchaseManager.makePurchase(product: pickedProd) { success, _ in
+                if success {
+                    dismiss()
+                }
+            }
+        } label: {
+            Text("Buy tokens")
+                .foregroundStyle(Color.white)
+                .font(.system(size: 15, weight: .medium))
+                .padding(.vertical, 19.5)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(pickedProd == nil || purchaseManager.isLoading
+                              ? Color.gray.opacity(0.5)
+                              : Color.blue)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .disabled(pickedProd == nil || purchaseManager.isLoading)
+    }
+    
+    private var productsPart: some View {
+        VStack(spacing: 8) {
+            if purchaseManager.tokenProducts.isEmpty {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(Color.white)
+                        .scaleEffect(1.5)
+                    
+                    if let error = purchaseManager.purchaseError {
+                        Text(error)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Color.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                    }
+                }
+                .padding(.vertical, 32)
+            } else {
+                ForEach(purchaseManager.tokenProducts, id: \.productId) { product in
+                    Button {
+                        pickedProd = product
+                    } label: {
+                        productCard(prod: product, isPicked: pickedProd == product)
+                    }
+                    .onAppear {
+                        if pickedProd == nil || (pickedProd?.price ?? 0) > product.price {
+                            pickedProd = product
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func productCard(prod: ApphudProduct, isPicked: Bool) -> some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: isPicked ? "checkmark.circle" : "circle")
+                    .resizable()
+                    .renderingMode(.template)
+                    .foregroundStyle(isPicked ? Color.white : Color.white.opacity(0.3))
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 24, height: 24)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(prod.productId)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                    
+                    Text(prod.localizedPrice)
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Color.white.opacity(0.7))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 73)
+        .overlay {
+            if isPicked {
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(Color.white, lineWidth: 2)
+                    .padding(1)
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: isPicked)
+        .contentShape(RoundedRectangle(cornerRadius: 20))
+    }
+}
+
+#Preview {
+    TokensPaywallView()
+        .environmentObject(PurchaseManager.shared)
+}
+
+
+

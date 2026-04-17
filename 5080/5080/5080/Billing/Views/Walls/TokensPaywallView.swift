@@ -19,6 +19,20 @@ struct TokensPaywallView: View {
         let message: String
     }
 
+    private enum TokensPaywallAssets {
+        static let heroImageName = "token_paywall_hero"
+        static let heroBackgroundImageName = "Onboarding.Background"
+    }
+
+    fileprivate enum TokensPaywallLayout {
+        static let productRowHeight: CGFloat = 72.scale
+        static let bottomContentTopOffset: CGFloat = -48.scale
+        static let titleToProducts: CGFloat = 18.scale
+        static let contentSpacerMin: CGFloat = 4.scale
+        static let continueTopSpacing: CGFloat = 10.scale
+        static let footerTopSpacing: CGFloat = 10.scale
+    }
+
     @EnvironmentObject private var purchaseManager: PurchaseManager
     @Environment(\.dismiss) private var dismiss
 
@@ -30,10 +44,8 @@ struct TokensPaywallView: View {
     @State private var errorMessage: String?
     @State private var activeSheet: TokensPaywallSheet?
     @State private var alertModel: TokensPaywallAlert?
-    @State private var isOverlayVisible = false
-    @State private var isSheetVisible = false
-    @State private var sheetDragOffset: CGFloat = 0.scale
-    @State private var isClosing = false
+    @State private var isCloseVisible = false
+    @State private var closeButtonTask: Task<Void, Never>?
 
     private var selectedProduct: BillingProduct? {
         sortedTokenProducts.first(where: { $0.id == selectedProductId })
@@ -41,19 +53,27 @@ struct TokensPaywallView: View {
 
     private var sortedTokenProducts: [BillingProduct] {
         purchaseManager.tokenProducts.sorted { lhs, rhs in
-            let lhsAmount = tokenAmount(from: lhs.id) ?? .max
-            let rhsAmount = tokenAmount(from: rhs.id) ?? .max
+            let lhsAmount = tokenAmount(from: lhs.id) ?? 0
+            let rhsAmount = tokenAmount(from: rhs.id) ?? 0
 
             if lhsAmount != rhsAmount {
-                return lhsAmount < rhsAmount
+                return lhsAmount > rhsAmount
             }
 
-            return lhs.price < rhs.price
+            return lhs.price > rhs.price
         }
+    }
+
+    private var topSellingProductID: String? {
+        sortedTokenProducts.first?.id
     }
 
     private var canPurchase: Bool {
         !isPurchasing && selectedProduct != nil && purchaseManager.isTokensReady
+    }
+
+    private var canDismissPaywall: Bool {
+        !isPurchasing && !isRestoring
     }
 
     private var termsURL: URL? {
@@ -64,34 +84,45 @@ struct TokensPaywallView: View {
         AppExternalResources.privacyPolicyURL
     }
 
+    private var contentHorizontalPadding: CGFloat {
+        switch DeviceLayout.type {
+        case .iPad:
+            return 28.scale
+        case .unknown:
+            return 20.scale
+        case .smallStatusBar, .notch, .dynamicIsland:
+            return 16.scale
+        }
+    }
+
+    private var closeButtonDelayNanoseconds: UInt64 {
+        5_000_000_000
+    }
+
     var body: some View {
         GeometryReader { geometry in
-            let sheetHeight = sheetHeight(
-                availableHeight: geometry.size.height,
-                safeBottom: geometry.safeAreaInsets.bottom
-            )
-            let hiddenOffset = sheetHeight
+            let columnWidth = contentColumnWidth(containerWidth: geometry.size.width)
 
-            ZStack(alignment: .bottom) {
-                Color.black
-                    .opacity(isOverlayVisible ? 0.5 : 0.0)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        guard canDismissSheet else { return }
-                        dismissSheet()
+            VStack(spacing: 0.scale) {
+                heroSection(width: columnWidth)
+                    .overlay(alignment: .topTrailing) {
+                        closeButton
+                            .padding(.top, geometry.safeAreaInsets.top + 8.scale)
+                            .padding(.trailing, 10.scale)
                     }
+                    .padding(.horizontal, contentHorizontalPadding)
+                    .ignoresSafeArea(edges: .top)
+                    .frame(maxWidth: .infinity)
 
-                paywallCard(
-                    safeBottom: geometry.safeAreaInsets.bottom,
-                    cardHeight: sheetHeight
-                )
-                    .offset(y: (isSheetVisible ? 0.scale : hiddenOffset) + sheetDragOffset)
-                    .gesture(sheetDragGesture)
+                bottomContent(width: columnWidth)
+                    .padding(.top, TokensPaywallLayout.bottomContentTopOffset)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .ignoresSafeArea()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(Tokens.Color.surfaceWhite.ignoresSafeArea())
             .preferredColorScheme(.light)
         }
+        .interactiveDismissDisabled(isPurchasing || isRestoring)
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .safari(let url):
@@ -110,9 +141,8 @@ struct TokensPaywallView: View {
             purchaseManager.trackCurrentPaywallShown(placementID: BillingConfig.adaptyTokensPlacementID)
             preselectIfNeeded()
             errorMessage = purchaseManager.tokenPurchaseError
+            scheduleCloseButtonAppearance()
             purchaseManager.debugLogTokenPaywallState(context: "TokensPaywallView.onAppear.afterPreselect")
-
-            presentSheet()
         }
         .onChange(of: purchaseManager.tokenProducts) { _, _ in
             preselectIfNeeded()
@@ -128,27 +158,42 @@ struct TokensPaywallView: View {
             )
         }
         .onDisappear {
+            closeButtonTask?.cancel()
             purchaseManager.debugLogTokenPaywallState(context: "TokensPaywallView.onDisappear")
             purchaseManager.trackCurrentPaywallClosed(placementID: BillingConfig.adaptyTokensPlacementID)
         }
     }
 
-    private func paywallCard(safeBottom: CGFloat, cardHeight: CGFloat) -> some View {
-        VStack(spacing: 0.scale) {
-            Capsule()
-                .fill(Tokens.Color.modeSheetPill)
-                .frame(width: 40.scale, height: 5.scale)
-                .padding(.top, 8.scale)
+    private var closeButton: some View {
+        Button {
+            dismissPaywall()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 13.scale, weight: .semibold))
+                .foregroundStyle(Tokens.Color.paywallPrimaryText)
+                .frame(width: 32.scale, height: 32.scale)
+                .background(
+                    Circle()
+                        .fill(Tokens.Color.surfaceWhite.opacity(0.94))
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!canDismissPaywall || !isCloseVisible)
+        .opacity((canDismissPaywall && isCloseVisible) ? 1.0 : 0.0)
+        .accessibilityLabel("Close")
+    }
 
-            Text("Get Sparks")
-                .font(Tokens.Font.outfitSemibold22)
-                .foregroundStyle(Tokens.Color.inkPrimary)
-                .kerning(-0.22.scale)
-                .padding(.top, 19.scale)
+    private func bottomContent(width: CGFloat) -> some View {
+        VStack(spacing: 0.scale) {
+            Text("Get More Tokens to Keep Building")
+                .font(Tokens.Font.paywallTitle20)
+                .foregroundStyle(Tokens.Color.paywallPrimaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 8.scale)
 
             tokenProductsSection
-                .padding(.top, 16.scale)
-                .padding(.horizontal, 16.scale)
+                .padding(.top, TokensPaywallLayout.titleToProducts)
 
             if let errorMessage,
                !sortedTokenProducts.isEmpty || errorMessage != purchaseManager.tokenPurchaseError {
@@ -157,43 +202,17 @@ struct TokensPaywallView: View {
                     .foregroundStyle(Tokens.Color.destructive)
                     .multilineTextAlignment(.center)
                     .padding(.top, 12.scale)
-                    .padding(.horizontal, 20.scale)
+                    .padding(.horizontal, 4.scale)
             }
 
-            Button {
-                continuePurchase()
-            }
-            label: {
-                Text(isPurchasing ? "Processing..." : "Continue")
-                    .font(Tokens.Font.semibold17)
-                    .foregroundStyle(Tokens.Color.surfaceWhite)
-                    .kerning(-0.17.scale)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 52.scale)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16.scale, style: .continuous)
-                            .fill(Tokens.Color.accent)
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(!canPurchase)
-            .opacity(canPurchase ? 1.0 : 0.55)
-            .padding(.top, 16.scale)
-            .padding(.horizontal, 16.scale)
+            Spacer(minLength: TokensPaywallLayout.contentSpacerMin)
 
-            footerLinks
-                .padding(.top, 8.scale)
-
-            Spacer(minLength: footerBottomSpacing(safeBottom: safeBottom))
+            bottomActions
         }
-        .frame(maxWidth: .infinity, alignment: .top)
-        .frame(height: cardHeight, alignment: .top)
-        .background(
-            Tokens.Color.surfaceWhite
-        )
-        .clipShape(
-            TokensPaywallTopRoundedCornersShape(radius: 32.scale)
-        )
+        .frame(width: width)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .padding(.horizontal, contentHorizontalPadding)
+        .padding(.bottom, bottomSectionInset)
     }
 
     @ViewBuilder
@@ -203,18 +222,18 @@ struct TokensPaywallView: View {
                 if purchaseManager.tokenPurchaseError == nil {
                     ProgressView()
                         .progressViewStyle(.circular)
-                        .tint(Tokens.Color.accent)
+                        .tint(Tokens.Color.onboardingContinueButton)
                 }
 
                 Text(purchaseManager.tokenPurchaseError ?? "Loading token packs...")
                     .font(Tokens.Font.regular16)
-                    .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.65))
+                    .foregroundStyle(Tokens.Color.paywallSecondaryText)
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 180.scale)
+            .frame(height: 220.scale)
         } else {
-            VStack(spacing: 12.scale) {
+            VStack(spacing: PaywallLayout.productsSpacing) {
                 ForEach(sortedTokenProducts) { product in
                     tokenRow(product)
                 }
@@ -229,109 +248,174 @@ struct TokensPaywallView: View {
             selectedProductId = product.id
             errorMessage = nil
         } label: {
-            HStack(spacing: 12.scale) {
-                tokenRowIcon
-                    .frame(width: 18.scale, height: 18.scale)
-
-                Text(tokenTitle(from: product.id))
-                    .font(Tokens.Font.outfitSemibold18)
-                    .foregroundStyle(Tokens.Color.inkPrimary)
-                    .kerning(-0.17.scale)
-                    .lineLimit(1)
-
-                Spacer(minLength: 12.scale)
-
-                Text(product.localizedPrice)
-                    .font(Tokens.Font.semibold17)
-                    .foregroundStyle(Tokens.Color.inkPrimary)
-                    .kerning(-0.17.scale)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 16.scale)
-            .frame(maxWidth: .infinity)
-            .frame(height: 53.scale)
-            .background(
-                RoundedRectangle(cornerRadius: 40.scale, style: .continuous)
-                    .fill(isSelected ? Tokens.Color.surfaceWhite : Tokens.Color.cardSoftBackground)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 40.scale, style: .continuous)
-                    .stroke(
-                        isSelected ? Tokens.Color.accent : Color.clear,
-                        lineWidth: 2.scale
-                    )
+            TokenPaywallRowView(
+                isSelected: isSelected,
+                isTopSelling: product.id == topSellingProductID,
+                title: buildsTitle(for: product),
+                subtitle: pricePerSiteText(for: product),
+                priceText: product.localizedPrice
             )
         }
         .buttonStyle(.plain)
     }
 
-    private var footerLinks: some View {
-        HStack(spacing: 32.scale) {
-            footerButton("Privacy Policy") {
-                if let privacyURL {
-                    activeSheet = .safari(privacyURL)
-                }
-            }
+    private var cancelAnytimeView: some View {
+        HStack(spacing: 6.scale) {
+            Image(systemName: "arrow.clockwise")
+                .font(Tokens.Font.regular14)
 
-            footerButton(isRestoring ? "Restoring..." : "Restore") {
-                restorePurchases()
-            }
-            .disabled(isRestoring)
-
-            footerButton("Terms of Use") {
-                if let termsURL {
-                    activeSheet = .safari(termsURL)
-                }
-            }
+            Text("Cancel Anytime")
+                .font(Tokens.Font.regular14)
         }
-        .buttonStyle(.plain)
-        .font(Tokens.Font.regular13)
-        .kerning(0.13.scale)
-        .foregroundStyle(Color(hex: "141414")?.opacity(0.6) ?? Color.black.opacity(0.6))
+        .foregroundStyle(Tokens.Color.paywallTertiaryText)
         .frame(maxWidth: .infinity)
     }
 
-    private func footerButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .lineLimit(1)
+    private var bottomActions: some View {
+        VStack(spacing: 0.scale) {
+            cancelAnytimeView
+
+            PaywallContinueButton(
+                title: isPurchasing ? "Processing..." : "Continue",
+                isEnabled: canPurchase,
+                onTap: continuePurchase
+            )
+            .padding(.top, TokensPaywallLayout.continueTopSpacing)
+
+            PaywallFooterLinksView(
+                termsTitle: "Terms of Use",
+                restoreTitle: isRestoring ? "Restoring..." : "Restore",
+                privacyTitle: "Privacy Policy",
+                onTerms: {
+                    if let termsURL {
+                        activeSheet = .safari(termsURL)
+                    }
+                },
+                onRestore: restorePurchases,
+                onPrivacy: {
+                    if let privacyURL {
+                        activeSheet = .safari(privacyURL)
+                    }
+                }
+            )
+            .padding(.top, TokensPaywallLayout.footerTopSpacing)
         }
     }
 
-    private var tokenRowIcon: some View {
-        Group {
-            if let image = UIImage(named: "Loader.Icon") {
-                Image(uiImage: image)
+    private func heroSection(width: CGFloat) -> some View {
+        let heroHeight = width * (276.0 / 402.0)
+
+        return ZStack {
+            if UIImage(named: TokensPaywallAssets.heroImageName) != nil {
+                Image(TokensPaywallAssets.heroImageName)
                     .resizable()
-                    .renderingMode(.template)
-                    .scaledToFit()
-                    .foregroundStyle(Tokens.Color.accent)
+                    .scaledToFill()
             } else {
-                Image(systemName: "sparkles")
-                    .resizable()
-                    .scaledToFit()
-                    .foregroundStyle(Tokens.Color.accent)
+                heroBackground
+                heroPlaceholderContent
             }
         }
+        .frame(width: width, height: heroHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 26.scale, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var heroBackground: some View {
+        if UIImage(named: TokensPaywallAssets.heroBackgroundImageName) != nil {
+            Image(TokensPaywallAssets.heroBackgroundImageName)
+                .resizable()
+                .scaledToFill()
+        } else {
+            LinearGradient(
+                colors: [
+                    Color(hex: "DDF5F8") ?? Tokens.Color.paywallOptionFill,
+                    Color(hex: "F6F1EA") ?? Tokens.Color.surfaceWhite
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+    }
+
+    private var heroPlaceholderContent: some View {
+        RoundedRectangle(cornerRadius: 22.scale, style: .continuous)
+            .fill(Tokens.Color.surfaceWhite.opacity(0.58))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22.scale, style: .continuous)
+                    .strokeBorder(
+                        Tokens.Color.paywallSelectedOptionStroke.opacity(0.28),
+                        style: StrokeStyle(
+                            lineWidth: 1.5.scale,
+                            dash: [8.scale, 6.scale]
+                        )
+                    )
+            )
+            .padding(.horizontal, 16.scale)
+            .padding(.vertical, 14.scale)
+            .overlay {
+                VStack(spacing: 10.scale) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 28.scale, weight: .medium))
+                        .foregroundStyle(Tokens.Color.paywallSelectedOptionStroke)
+
+                    Text("Token Paywall Hero")
+                        .font(Tokens.Font.semibold17)
+                        .foregroundStyle(Tokens.Color.paywallPrimaryText)
+
+                    Text("Placeholder for 402 x 276 image")
+                        .font(Tokens.Font.medium14)
+                        .foregroundStyle(Tokens.Color.paywallSecondaryText)
+                }
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20.scale)
+            }
     }
 
     private func preselectIfNeeded() {
-        if selectedProduct == nil {
-            selectedProductId = sortedTokenProducts.first?.id
-        }
+        guard selectedProduct == nil else { return }
+        selectedProductId = topSellingProductID ?? sortedTokenProducts.first?.id
     }
 
-    private func tokenTitle(from id: String) -> String {
-        guard let tokenValue = tokenAmount(from: id) else {
-            return "Token pack"
+    private func buildsTitle(for product: BillingProduct) -> String {
+        guard let amount = tokenAmount(from: product.id) else {
+            return "Token Pack"
         }
 
+        return "\(formattedAmount(amount)) Builds"
+    }
+
+    private func pricePerSiteText(for product: BillingProduct) -> String {
+        guard let amount = tokenAmount(from: product.id), amount > 0 else {
+            return ""
+        }
+
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.roundingMode = .halfUp
+        formatter.currencyCode = product.currencyCode ?? "USD"
+
+        if let regionCode = product.priceRegionCode, !regionCode.isEmpty {
+            formatter.locale = Locale(identifier: "en_\(regionCode)")
+        } else {
+            formatter.locale = Locale(identifier: "en_US")
+        }
+
+        let pricePerSite = NSDecimalNumber(decimal: product.price).doubleValue / Double(amount)
+        formatter.minimumFractionDigits = pricePerSite >= 0.1 ? 1 : 2
+        formatter.maximumFractionDigits = 2
+
+        let formattedPrice = formatter.string(from: NSNumber(value: pricePerSite))
+            ?? String(format: "$%.2f", pricePerSite)
+
+        return "\(formattedPrice) / site"
+    }
+
+    private func formattedAmount(_ amount: Int) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         formatter.groupingSeparator = " "
         formatter.maximumFractionDigits = 0
-
-        return formatter.string(from: NSNumber(value: tokenValue)) ?? "\(tokenValue)"
+        return formatter.string(from: NSNumber(value: amount)) ?? "\(amount)"
     }
 
     private func tokenAmount(from id: String) -> Int? {
@@ -340,37 +424,36 @@ struct TokensPaywallView: View {
         return Int(firstNumericChunk)
     }
 
-    private func footerBottomSpacing(safeBottom: CGFloat) -> CGFloat {
+    private func contentColumnWidth(containerWidth: CGFloat) -> CGFloat {
+        let availableWidth = max(0.scale, containerWidth - (contentHorizontalPadding * 2))
+        return min(availableWidth, 402.scale)
+    }
+
+    private var bottomSectionInset: CGFloat {
         switch DeviceLayout.type {
         case .smallStatusBar:
-            return 16.scale
+            return 12.scale
         case .iPad:
-            return max(20.scale, safeBottom)
+            return 20.scale
         case .unknown:
-            return max(16.scale, safeBottom)
+            return 16.scale
         case .notch, .dynamicIsland:
-            return max(10.scale, safeBottom - 4.scale)
+            return 10.scale
         }
     }
 
-    private func sheetHeight(availableHeight: CGFloat, safeBottom: CGFloat) -> CGFloat {
-        let baseHeight: CGFloat
+    private func scheduleCloseButtonAppearance() {
+        closeButtonTask?.cancel()
+        isCloseVisible = false
 
-        switch DeviceLayout.type {
-        case .smallStatusBar:
-            baseHeight = 424.scale
-        case .iPad:
-            baseHeight = 492.scale
-        case .unknown:
-            baseHeight = 450.scale
-        case .notch, .dynamicIsland:
-            baseHeight = 482.scale
+        closeButtonTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: closeButtonDelayNanoseconds)
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isCloseVisible = true
+            }
         }
-
-        let minHeight = DeviceLayout.isPad ? 430.scale : 400.scale
-        let maxHeight = max(380.scale, availableHeight - (DeviceLayout.isPad ? 110.scale : 80.scale))
-
-        return min(max(baseHeight + safeBottom, minHeight), maxHeight)
     }
 
     private func continuePurchase() {
@@ -385,7 +468,7 @@ struct TokensPaywallView: View {
         purchaseManager.makePurchase(product: selectedProduct) { success, error in
             isPurchasing = false
             if success {
-                dismissSheet()
+                dismissPaywall()
             } else {
                 errorMessage = error ?? "Purchase failed"
             }
@@ -411,62 +494,9 @@ struct TokensPaywallView: View {
         }
     }
 
-    private var canDismissSheet: Bool {
-        !isPurchasing && !isRestoring && !isClosing
-    }
-
-    private var sheetDragGesture: some Gesture {
-        DragGesture(minimumDistance: 4.scale, coordinateSpace: .global)
-            .onChanged { value in
-                guard canDismissSheet else { return }
-                sheetDragOffset = max(0.scale, value.translation.height)
-            }
-            .onEnded { value in
-                guard canDismissSheet else {
-                    sheetDragOffset = 0.scale
-                    return
-                }
-
-                let shouldDismiss = value.translation.height > 120.scale || value.predictedEndTranslation.height > 180.scale
-                guard shouldDismiss else {
-                    withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
-                        sheetDragOffset = 0.scale
-                    }
-                    return
-                }
-
-                dismissSheet()
-            }
-    }
-
-    private func presentSheet() {
-        withAnimation(.easeOut(duration: 0.14)) {
-            isOverlayVisible = true
-        }
-
-        withAnimation(.spring(response: 0.26, dampingFraction: 0.92)) {
-            isSheetVisible = true
-        }
-    }
-
-    private func dismissSheet() {
-        guard !isClosing else { return }
-
-        isClosing = true
-
-        withAnimation(.easeOut(duration: 0.16)) {
-            isOverlayVisible = false
-        }
-
-        withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
-            isSheetVisible = false
-            sheetDragOffset = 0.scale
-        }
-
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 240_000_000)
-            completeClose()
-        }
+    private func dismissPaywall() {
+        guard canDismissPaywall else { return }
+        completeClose()
     }
 
     private func completeClose() {
@@ -478,15 +508,94 @@ struct TokensPaywallView: View {
     }
 }
 
-private struct TokensPaywallTopRoundedCornersShape: Shape {
-    let radius: CGFloat
+private struct TokenPaywallRowView: View {
+    let isSelected: Bool
+    let isTopSelling: Bool
+    let title: String
+    let subtitle: String
+    let priceText: String
 
-    func path(in rect: CGRect) -> Path {
-        let path = UIBezierPath(
-            roundedRect: rect,
-            byRoundingCorners: [.topLeft, .topRight],
-            cornerRadii: CGSize(width: radius, height: radius)
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            RoundedRectangle(
+                cornerRadius: PaywallLayout.optionCorner,
+                style: .continuous
+            )
+            .fill(isSelected ? Tokens.Color.paywallSelectedOptionFill : Tokens.Color.paywallOptionFill)
+            .overlay(
+                RoundedRectangle(
+                    cornerRadius: PaywallLayout.optionCorner,
+                    style: .continuous
+                )
+                .stroke(
+                    isSelected ? Tokens.Color.paywallSelectedOptionStroke : Tokens.Color.paywallOptionStroke,
+                    lineWidth: isSelected ? 2.scale : 1.scale
+                )
+            )
+
+            HStack(spacing: 12.scale) {
+                selectionBullet
+
+                VStack(alignment: .leading, spacing: 4.scale) {
+                    Text(title)
+                        .font(Tokens.Font.semibold17)
+                        .foregroundStyle(Tokens.Color.paywallPrimaryText)
+                        .lineLimit(1)
+
+                    Text(subtitle)
+                        .font(Tokens.Font.medium14)
+                        .foregroundStyle(Tokens.Color.paywallPrimaryText)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 12.scale)
+
+                Text(priceText)
+                    .font(Tokens.Font.semibold17)
+                    .foregroundStyle(Tokens.Color.paywallPrimaryText)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 16.scale)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: TokensPaywallView.TokensPaywallLayout.productRowHeight)
+
+            if isTopSelling {
+                Text("TOP SELLING")
+                    .font(Tokens.Font.medium12)
+                    .foregroundStyle(Tokens.Color.surfaceWhite)
+                    .frame(width: 95.scale, height: 21.scale)
+                    .background(
+                        Capsule()
+                            .fill(Tokens.Color.paywallSelectedOptionStroke)
+                    )
+                    .offset(x: -12.scale, y: -10.scale)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(
+            RoundedRectangle(
+                cornerRadius: PaywallLayout.optionCorner,
+                style: .continuous
+            )
         )
-        return Path(path.cgPath)
+    }
+
+    private var selectionBullet: some View {
+        ZStack {
+            if isSelected {
+                Circle()
+                    .fill(Tokens.Color.paywallSelectedOptionStroke)
+                    .frame(width: 24.scale, height: 24.scale)
+
+                Circle()
+                    .fill(Tokens.Color.surfaceWhite)
+                    .frame(width: 8.scale, height: 8.scale)
+            } else {
+                Circle()
+                    .stroke(Tokens.Color.paywallPrimaryText.opacity(0.15), lineWidth: 1.5.scale)
+                    .frame(width: 24.scale, height: 24.scale)
+            }
+        }
+        .frame(width: 24.scale, height: 24.scale)
     }
 }

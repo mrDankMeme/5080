@@ -1,0 +1,625 @@
+{
+  "info": {
+    "name": "Site Maker API",
+    "description": "AI-powered landing page generator. Generates premium React + Tailwind sites from text prompts via Claude LLM.\n\n## Auth\nJWT Bearer tokens. Register → get tokens → use access_token in Authorization header.\n\n## Credits\nContent-creation endpoints (create project, clarify, generate, edit) require credits. Returns 402 if balance is zero. Credits are added via Adapty webhooks or the Admin API.\n\n## Flow\n1. Register/Login → get tokens\n2. Create project\n3. Clarify (SSE) → get design brief + questions\n4. Generate (SSE) → get preview URL\n5. Edit (SSE) → iterate on the site\n\n## Rate Limits\n- Register: 5/min\n- Login/Refresh: 10/min\n- Clarify/Generate/Edit: 10/min",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://sitemaker.cloud",
+      "type": "string"
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refresh_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "project_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "admin_api_key",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "product_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "description": "Authentication endpoints. Registration is restricted to iOS anonymous accounts ({UUID}@not-real-email).",
+      "item": [
+        {
+          "name": "Register",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var json = pm.response.json();",
+                  "    pm.collectionVariables.set('access_token', json.access_token);",
+                  "    pm.collectionVariables.set('refresh_token', json.refresh_token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Generate a random UUID for anonymous registration",
+                  "var uuid = require('uuid');",
+                  "pm.variables.set('random_uuid', uuid.v4());"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{random_uuid}}@not-real-email\",\n  \"password\": \"TestPass123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/register",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "register"]
+            },
+            "description": "Create a new anonymous account. Email must match `{UUID}@not-real-email` format.\n\n**Password requirements:** min 8 chars, 1 uppercase, 1 digit.\n\nTokens are auto-saved to collection variables.\n\n**Rate limit:** 5/minute\n\n**Errors:**\n- `403` — Non-allowed email format\n- `409` — Email already registered\n- `422` — Weak password"
+          },
+          "response": []
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    var json = pm.response.json();",
+                  "    pm.collectionVariables.set('access_token', json.access_token);",
+                  "    pm.collectionVariables.set('refresh_token', json.refresh_token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"your-uuid@not-real-email\",\n  \"password\": \"TestPass123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "Authenticate an existing user. Tokens are auto-saved to collection variables.\n\n**Rate limit:** 10/minute\n\n**Errors:**\n- `401` — Invalid email or password"
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    var json = pm.response.json();",
+                  "    pm.collectionVariables.set('access_token', json.access_token);",
+                  "    pm.collectionVariables.set('refresh_token', json.refresh_token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/refresh?refresh_token={{refresh_token}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "refresh"],
+              "query": [
+                {
+                  "key": "refresh_token",
+                  "value": "{{refresh_token}}"
+                }
+              ]
+            },
+            "description": "Get a new token pair using a refresh token. Must be a refresh token — access tokens are rejected.\n\n**Rate limit:** 10/minute\n\n**Errors:**\n- `401` — Invalid or expired refresh token"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Current User",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/me",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "me"]
+            },
+            "description": "Get the current authenticated user's profile. Includes `credits` balance."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Projects",
+      "description": "CRUD operations for projects. All endpoints require authentication. Create requires credits (402 if zero).",
+      "item": [
+        {
+          "name": "List Projects",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/projects",
+              "host": ["{{base_url}}"],
+              "path": ["api", "projects"]
+            },
+            "description": "List all projects for the current user, ordered by last updated.\n\n**Statuses:** `draft` (just created), `live` (site built), `error` (build failed)"
+          },
+          "response": []
+        },
+        {
+          "name": "Create Project",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var json = pm.response.json();",
+                  "    pm.collectionVariables.set('project_id', json.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"My Landing Page\",\n  \"description\": \"Optional description\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/projects",
+              "host": ["{{base_url}}"],
+              "path": ["api", "projects"]
+            },
+            "description": "Create a new project. Requires at least 1 credit. Generates a unique slug automatically. Project ID is auto-saved to collection variables.\n\n**Errors:**\n- `402` — Insufficient credits"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Project",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/projects/{{project_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "projects", "{{project_id}}"]
+            },
+            "description": "Get full project details including spec and file manifest.\n\n`current_spec` and `current_files` are JSON-encoded strings — parse them to get the objects.\n\n**Errors:**\n- `404` — Project not found\n- `403` — Not your project"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Project",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Name\",\n  \"description\": \"Updated description\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/projects/{{project_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "projects", "{{project_id}}"]
+            },
+            "description": "Update project name or description. All fields optional."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Project",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/projects/{{project_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "projects", "{{project_id}}"]
+            },
+            "description": "Delete a project and all its generations/assets.\n\n**Response:** `204 No Content` (empty body — do not parse JSON)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Generation History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/projects/{{project_id}}/history",
+              "host": ["{{base_url}}"],
+              "path": ["api", "projects", "{{project_id}}", "history"]
+            },
+            "description": "Get generation history for a project, ordered by version descending.\n\n**Generation statuses:** `pending`, `running`, `completed`, `error`"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Generation (SSE)",
+      "description": "SSE streaming endpoints for clarify, generate, and edit. All require credits (402 if zero).\n\nThese return `text/event-stream` responses. In Postman, the response will appear as raw SSE text.\n\nAll `data` fields are JSON-encoded — strings are quoted, objects are serialized.",
+      "item": [
+        {
+          "name": "Clarify",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"Coffee shop landing page\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/projects/{{project_id}}/clarify",
+              "host": ["{{base_url}}"],
+              "path": ["api", "projects", "{{project_id}}", "clarify"]
+            },
+            "description": "**Step 1:** Analyze a short user prompt and return a detailed design brief with preference questions.\n\n**Input:** `prompt` (2-2,000 chars)\n\n**Requires:** 1+ credits (does not deduct)\n\n**Rate limit:** 10/minute\n\n**SSE Events:**\n- `clarify_start` — `\"Analyzing your idea...\"`\n- `clarify_token` — individual text tokens (repeated)\n- `clarify_complete` — full JSON brief with `description`, `suggested_theme`, `suggested_palette`, `questions[]`\n- `error` — `{ \"message\": \"...\" }`\n\n**Duration:** 3-8 seconds\n\n**Next step:** Show brief to user, let them pick options, then build an enriched prompt for `/generate`."
+          },
+          "response": []
+        },
+        {
+          "name": "Generate",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"Original request: Coffee shop landing page\\n\\nDesign brief: A warm, inviting landing page for a local coffee shop...\\n\\nDesign preferences:\\nTheme → Dark\\nPalette → Warm browns & cream\\nMood → Cozy & inviting\\nSections → Menu showcase\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/projects/{{project_id}}/generate",
+              "host": ["{{base_url}}"],
+              "path": ["api", "projects", "{{project_id}}", "generate"]
+            },
+            "description": "**Step 2:** Generate a full site from the enriched prompt.\n\n**Input:** `prompt` (2-10,000 chars) — use the enriched prompt from the clarify step.\n\n**Requires:** 1+ credits (deducts 1 on success)\n\n**Rate limit:** 10/minute\n\n**SSE Events:**\n- `spec_start` → `spec_token` (many) → `spec_complete` — site specification\n- *(5-15s pause — backend fetches AI images)*\n- `code_start` → `code_token` (many) → `code_complete` — React code\n- `files_written` — `{ file_count, files[], duration_ms }`\n- `build_start` → `build_complete` — `{ preview_url, build: { success, output_path } }`\n- `error` — `{ \"message\": \"...\" }`\n\n**Duration:** 50-100 seconds total"
+          },
+          "response": []
+        },
+        {
+          "name": "Edit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"instruction\": \"Add a testimonials section with 3 customer quotes\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/projects/{{project_id}}/edit",
+              "host": ["{{base_url}}"],
+              "path": ["api", "projects", "{{project_id}}", "edit"]
+            },
+            "description": "Edit an existing generated site. Project must have `current_files` (generate first).\n\n**Input:** `instruction` (2-5,000 chars)\n\n**Requires:** 1+ credits (deducts 1 on success)\n\n**Rate limit:** 10/minute\n\n**SSE Events (no spec phase):**\n- `code_start` → `code_token` (many) → `code_complete`\n- `files_written` — `{ file_count, changed_files[], duration_ms }`\n- `build_start` → `build_complete` — `{ preview_url, build }`\n- `error` — `{ \"message\": \"...\" }`\n\n**Duration:** 10-30 seconds\n\n**Errors:**\n- `400` — No existing files (generate first)\n- `402` — Insufficient credits"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Uploads",
+      "description": "File upload endpoints for project assets.",
+      "item": [
+        {
+          "name": "Upload File",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/projects/{{project_id}}/upload",
+              "host": ["{{base_url}}"],
+              "path": ["api", "projects", "{{project_id}}", "upload"]
+            },
+            "description": "Upload an image/asset for a project.\n\n**Constraints:**\n- Max size: 10 MB\n- Allowed types: jpeg, png, gif, webp, svg+xml, pdf\n- Allowed extensions: .jpg, .jpeg, .png, .gif, .webp, .svg, .pdf\n\nFilenames are sanitized (UUID + original extension).\n\nUploaded files accessible at: `{base_url}/uploads/{project_slug}/{filename}`\n\n**Errors:**\n- `400` — Type/extension not allowed\n- `413` — File too large"
+          },
+          "response": []
+        },
+        {
+          "name": "List Assets",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/projects/{{project_id}}/assets",
+              "host": ["{{base_url}}"],
+              "path": ["api", "projects", "{{project_id}}", "assets"]
+            },
+            "description": "List all uploaded assets for a project."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "description": "Admin endpoints for managing credit products. Requires `X-Admin-Key` header matching the `ADMIN_API_KEY` env var.\n\nSet the `admin_api_key` collection variable to use these.",
+      "item": [
+        {
+          "name": "List Credit Products",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{admin_api_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/credit-products",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "credit-products"]
+            },
+            "description": "List all credit products, ordered by type and lookup key."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Credit Product",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var json = pm.response.json();",
+                  "    pm.collectionVariables.set('product_id', json.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{admin_api_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"product_type\": \"subscription\",\n  \"lookup_key\": \"week_7.99_not_trial\",\n  \"credits\": 3,\n  \"description\": \"Weekly subscription - 3 credits\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/credit-products",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "credit-products"]
+            },
+            "description": "Create a new credit product mapping.\n\n**Fields:**\n- `product_type` — `\"subscription\"` or `\"consumable\"`\n- `lookup_key` — `vendor_product_id` for subscriptions, price as string (e.g. `\"19.99\"`) for consumables\n- `credits` — number of credits to grant\n- `description` — optional human-readable label\n\nProduct ID is auto-saved to collection variables.\n\n**Errors:**\n- `409` — Product with this lookup_key already exists"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Credit Product",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "PUT",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{admin_api_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"credits\": 5,\n  \"description\": \"Updated description\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/credit-products/{{product_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "credit-products", "{{product_id}}"]
+            },
+            "description": "Update an existing credit product. Both fields are optional — only provided fields are updated.\n\n**Errors:**\n- `404` — Product not found"
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Credit Product",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{admin_api_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/credit-products/{{product_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "credit-products", "{{product_id}}"]
+            },
+            "description": "Delete a credit product.\n\n**Response:** `204 No Content`\n\n**Errors:**\n- `404` — Product not found"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Webhooks",
+      "description": "Webhook endpoints for external services. These are called by Adapty, not by the client app.",
+      "item": [
+        {
+          "name": "Adapty Webhook",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "your-adapty-webhook-secret"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customer_user_id\": \"550e8400-e29b-41d4-a716-446655440000@not-real-email\",\n  \"event_type\": \"subscription_started\",\n  \"event_properties\": {\n    \"profile_event_id\": \"test-event-001\",\n    \"vendor_product_id\": \"week_7.99_not_trial\",\n    \"price_usd\": 7.99\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/webhooks/adapty",
+              "host": ["{{base_url}}"],
+              "path": ["api", "webhooks", "adapty"]
+            },
+            "description": "Adapty webhook endpoint. Called by Adapty when subscription/purchase events occur.\n\n**Auth:** `Authorization` header must match `ADAPTY_WEBHOOK_SECRET` env var.\n\n**Handled events:**\n- `subscription_started` — user activates paid subscription\n- `subscription_renewed` — subscription renews\n- `non_subscription_purchase` — one-time consumable purchase\n\n**Responses:**\n- `200 {\"status\": \"ok\", \"credits_added\": N}` — credits added\n- `200 {\"status\": \"ignored\"}` — unhandled event type\n- `200 {\"status\": \"duplicate\"}` — already processed (idempotent)\n- `400` — missing fields or unknown product\n- `401` — invalid webhook secret\n- `404` — user not found"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/health",
+              "host": ["{{base_url}}"],
+              "path": ["api", "health"]
+            },
+            "description": "No auth required. Returns `{ \"status\": \"ok\" }` if the server is running."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

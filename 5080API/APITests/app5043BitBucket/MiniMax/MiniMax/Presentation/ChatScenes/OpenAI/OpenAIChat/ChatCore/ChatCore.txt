@@ -1,0 +1,1433 @@
+////////////////////////////////////////////////////////////
+// FILE: ChatContainerView/ActivityView.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+import UIKit
+
+struct ActivityView: UIViewControllerRepresentable {
+
+    let activityItems: [Any]
+    var applicationActivities: [UIActivity]? = nil
+    var excludedActivityTypes: [UIActivity.ActivityType]? = nil
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let vc = UIActivityViewController(activityItems: activityItems, applicationActivities: applicationActivities)
+        vc.excludedActivityTypes = excludedActivityTypes
+        return vc
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ChatContainerView/ChatBubble.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+
+// MARK: - Bubble row (avatar + message)
+
+struct ChatBubble: View {
+    let message: ChatMessage
+
+    private let avatarSize: CGFloat = 32.scale
+    private let bubbleCorner: CGFloat = 20.scale
+
+    private let systemHintMaxWidth: CGFloat = 320.scale
+    private let systemHintCorner: CGFloat = 16.scale
+
+    var body: some View {
+        switch message.role {
+        case .assistant:
+            HStack(alignment: .top, spacing: 10.scale) {
+                avatar(imageName: "Chat.robot")
+                bubble
+                Spacer(minLength: 40.scale)
+            }
+
+        case .user:
+            HStack(alignment: .top, spacing: 10.scale) {
+                Spacer(minLength: 40.scale)
+                bubble
+                avatar(imageName: "Chat.user")
+            }
+
+        case .system:
+            systemHintRow
+        }
+    }
+
+    // MARK: - Avatars
+
+    private func avatar(imageName: String) -> some View {
+        Image(imageName)
+            .resizable()
+            .scaledToFit()
+            .frame(width: avatarSize, height: avatarSize)
+    }
+
+    // MARK: - System hint (compact)
+
+    private var systemHintRow: some View {
+        HStack {
+            Spacer(minLength: 0)
+
+            systemHint
+                .frame(maxWidth: systemHintMaxWidth, alignment: .center)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 6.scale)
+    }
+
+    private var systemHint: some View {
+        Text(message.text)
+            .font(Tokens.Font.regular11)
+            .foregroundStyle(Tokens.Color.textPrimary)
+            .multilineTextAlignment(.leading)
+            .padding(.horizontal, 14.scale)
+            .padding(.vertical, 10.scale)
+            .background(
+                RoundedRectangle(cornerRadius: systemHintCorner, style: .continuous)
+                    .fill(Color.black.opacity(0.04))
+            )
+    }
+
+    // MARK: - Regular bubble (user/assistant)
+
+    private var bubble: some View {
+        VStack(alignment: .leading, spacing: 10.scale) {
+
+            if shouldShowInlineProcessing {
+                inlineProcessing
+            } else {
+
+                if !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(message.text)
+                        .font(.system(size: 16.scale, weight: .regular))
+                        .foregroundStyle(Tokens.Color.textPrimary)
+                }
+
+                if !message.attachments.isEmpty {
+                    VStack(alignment: .leading, spacing: 10.scale) {
+                        ForEach(message.attachments) { att in
+                            MessageAttachmentChip(
+                                kind: att.kind,
+                                title: att.filename,
+                                subtitle: formatBytes(att.sizeBytes)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 12.scale)
+        .padding(.horizontal, 14.scale)
+        .background(bubbleBackground)
+        .clipShape(RoundedRectangle(cornerRadius: bubbleCorner, style: .continuous))
+        .shadow(color: bubbleShadowColor, radius: bubbleShadowRadius, x: 0, y: bubbleShadowYOffset)
+    }
+
+    private var shouldShowInlineProcessing: Bool {
+        message.role == .assistant && message.text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("⏳")
+    }
+
+    private var inlineProcessing: some View {
+        HStack(spacing: 8.scale) {
+            ProgressView().tint(Tokens.Color.textSecondary) 
+            Text("Processing…")
+                .font(Tokens.Font.regular11)
+                .foregroundStyle(Tokens.Color.textSecondary)
+        }
+    }
+
+    private var bubbleBackground: Color {
+        switch message.role {
+        case .assistant:
+            return Color(hex:"#202020")!
+        case .user:
+            return Color(hex:"#202020")!
+        case .system:
+            return Color(hex:"#202020")!
+        }
+    }
+
+    private var bubbleShadowColor: Color {
+        switch message.role {
+        case .assistant:
+            return Color.black.opacity(0.08)
+        case .user, .system:
+            return Color.clear
+        }
+    }
+
+    private var bubbleShadowRadius: CGFloat {
+        message.role == .assistant ? 10.scale : 0
+    }
+
+    private var bubbleShadowYOffset: CGFloat {
+        message.role == .assistant ? 4.scale : 0
+    }
+
+    // MARK: - Helpers
+
+    private func formatBytes(_ bytes: Int) -> String {
+        let kb = Double(bytes) / 1024.0
+        if kb < 1024.0 { return String(format: "%.0f KB", kb) }
+        let mb = kb / 1024.0
+        return String(format: "%.1f MB", mb)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ChatContainerView/ChatContainerView.swift
+////////////////////////////////////////////////////////////
+
+// FILE: OpenAIChat/ChatCore/ChatContainerView/ChatContainerView.swift
+
+import SwiftUI
+
+struct ChatContainerView<Composer: View>: View {
+
+    let title: String
+    let messages: [ChatMessage]
+    let isLoading: Bool
+    let errorText: String?
+    let onTapMore: (() -> Void)?
+    let composer: Composer
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var didInitialScroll: Bool = false
+    @State private var scrollTask: Task<Void, Never>? = nil
+
+    // “Пользователь внизу?” — если нет, автоскролл не делаем (иначе будет дёргать, когда читают историю)
+    @State private var isNearBottom: Bool = true
+
+    // Настройка “насколько близко к низу” считаем “внизу”
+    private let nearBottomThreshold: CGFloat = 120.scale
+
+    private let bottomAnchorId: String = "CHAT_BOTTOM_ANCHOR"
+    private let scrollSpaceName: String = "CHAT_SCROLL_SPACE"
+
+    init(
+        title: String,
+        messages: [ChatMessage],
+        isLoading: Bool,
+        errorText: String?,
+        onTapMore: (() -> Void)? = nil,
+        @ViewBuilder composer: () -> Composer
+    ) {
+        self.title = title
+        self.messages = messages
+        self.isLoading = isLoading
+        self.errorText = errorText
+        self.onTapMore = onTapMore
+        self.composer = composer()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+
+            header
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12.scale) {
+
+                        ForEach(messages) { msg in
+                            ChatBubble(message: msg)
+                                .id(msg.id)
+                        }
+
+                        if let errorText, !errorText.isEmpty {
+                            Text(errorText)
+                                .foregroundStyle(.red)
+                                .font(.footnote)
+                                .padding(.top, 8.scale)
+                        }
+
+                        // Нижний якорь + геометрия для “я внизу?”
+                        BottomAnchorProbe(
+                            anchorId: bottomAnchorId,
+                            threshold: nearBottomThreshold
+                        )
+                    }
+                    .padding(.horizontal, 16.scale)
+                    .padding(.vertical, 16.scale)
+                }
+                .coordinateSpace(name: scrollSpaceName)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    UIApplication.dismissKeyboard()
+                }
+                .onPreferenceChange(IsNearBottomPreferenceKey.self) { newValue in
+                    // Старайся не спамить state, но это ок — значение меняется только при реальном скролле/изменении высот.
+                    isNearBottom = newValue
+                }
+                .onAppear {
+                    attemptInitialScrollIfNeeded(proxy)
+                }
+                .onChange(of: scrollSignal) { _ in
+                    // Автоскролл:
+                    // - всегда при первом появлении/первой загрузке (без анимации)
+                    // - дальше только если пользователь был “внизу”
+                    if didInitialScroll == false {
+                        didInitialScroll = true
+                        scheduleScrollToBottom(proxy, animated: false)
+                        return
+                    }
+
+                    guard isNearBottom else { return }
+                    scheduleScrollToBottom(proxy, animated: true)
+                }
+            }
+
+            composer
+                .padding(.bottom, 8.scale)
+                .background(TokensColor.chatBackground)
+        }
+        .background(TokensColor.chatBackground.ignoresSafeArea())
+        .navigationBarHidden(true)
+        .onDisappear {
+            scrollTask?.cancel()
+            scrollTask = nil
+        }
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        ZStack {
+            Text(title)
+                .font(Tokens.Font.medium17)
+                .foregroundStyle(Tokens.Color.textPrimary)
+
+            HStack {
+                Button { dismiss() } label: {
+                    Image("ic_nav_back_40")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 40.scale, height: 40.scale)
+                }
+
+                Spacer()
+
+                Button { onTapMore?() } label: {
+                    Image("ic_nav_more_40")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 40.scale, height: 40.scale)
+                }
+            }
+            .padding(.horizontal, 12.scale)
+        }
+        .frame(height: 56.scale)
+        .padding(.top, 6.scale)
+        .background(TokensColor.chatBackground)
+    }
+
+    // MARK: - Scroll signal (важно!)
+
+    /// Это ключевой момент.
+    /// Мы триггерим автоскролл не только по count / last.id,
+    /// но и по изменениям содержимого последнего сообщения (текст / attachments),
+    /// чтобы сработало при replaceMessage(...) (id тот же).
+    private var scrollSignal: ScrollSignal {
+        let last = messages.last
+        return ScrollSignal(
+            count: messages.count,
+            lastId: last?.id,
+            lastTextHash: last?.text.hashValue ?? 0,
+            lastAttachmentsCount: last?.attachments.count ?? 0,
+            lastAttachmentsBytesSum: (last?.attachments.reduce(0, { $0 + $1.sizeBytes }) ?? 0)
+        )
+    }
+
+    private struct ScrollSignal: Equatable {
+        let count: Int
+        let lastId: UUID?
+        let lastTextHash: Int
+        let lastAttachmentsCount: Int
+        let lastAttachmentsBytesSum: Int
+    }
+
+    // MARK: - Initial scroll
+
+    private func attemptInitialScrollIfNeeded(_ proxy: ScrollViewProxy) {
+        guard didInitialScroll == false else { return }
+        guard messages.isEmpty == false else { return }
+
+        didInitialScroll = true
+        scheduleScrollToBottom(proxy, animated: false)
+    }
+
+    // MARK: - Robust scroll (with layout-safe retries)
+
+    private func scheduleScrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
+        scrollTask?.cancel()
+
+        scrollTask = Task { @MainActor in
+            // Для длинных сообщений высота “доезжает” не за один проход.
+            // Несколько попыток — нормально и стабильно.
+            let delaysMs: [UInt64] = animated
+                ? [0, 30, 80, 140, 220, 320]
+                : [0, 60, 140]
+
+            for ms in delaysMs {
+                if Task.isCancelled { return }
+
+                if ms == 0 {
+                    await Task.yield()
+                } else {
+                    try? await Task.sleep(nanoseconds: ms * 1_000_000)
+                }
+
+                if Task.isCancelled { return }
+
+                if animated {
+                    withAnimation(.easeOut(duration: 0.20)) {
+                        proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+                    }
+                } else {
+                    proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Bottom “near-bottom” probe via PreferenceKey
+
+private struct IsNearBottomPreferenceKey: PreferenceKey {
+    static var defaultValue: Bool = true
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        // Если в дереве вдруг будет несколько значений — берём последнее.
+        value = nextValue()
+    }
+}
+
+private struct BottomAnchorProbe: View {
+    let anchorId: String
+    let threshold: CGFloat
+
+    var body: some View {
+        GeometryReader { geo in
+            // В coordinateSpace ScrollView’а:
+            // когда bottomAnchor "почти на экране", значит мы около низа.
+            let frame = geo.frame(in: .named("CHAT_SCROLL_SPACE"))
+            let isNear = frame.maxY <= (geo.size.height + threshold)
+
+            Color.clear
+                .preference(key: IsNearBottomPreferenceKey.self, value: isNear)
+        }
+        .frame(height: 1)
+        .id(anchorId)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ChatContainerView/ChatOptionsSheet.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct ChatOptionsSheet: View {
+
+    let onCopyAll: () -> Void
+    let onShare: () -> Void
+    let onExport: () -> Void
+    let onDelete: () -> Void
+    let onClose: () -> Void
+
+    // MARK: - Design (по макету)
+
+    private let headerHeight: CGFloat = 20.scale
+    private let headerHorizontalInset: CGFloat = 24.scale
+
+    private let closeSize: CGFloat = 40.scale
+
+    private let dividerOpacity: CGFloat = 0.2
+
+    private let buttonsHorizontalInset: CGFloat = 16.scale
+    private let firstButtonTopInset: CGFloat = 20.scale
+    private let buttonsVSpacing: CGFloat = 12.scale
+
+    private let buttonHeight: CGFloat = 57.scale
+    private let buttonCornerRadius: CGFloat = 16.scale
+
+    private let iconSize: CGFloat = 20.scale
+    private let iconLeadingInset: CGFloat = 16.scale
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            divider
+
+            VStack(spacing: buttonsVSpacing) {
+                optionButton(
+                    title: "chat_options.copy_all".localizable,
+                    assetName: "ChatOptions.Copy",
+                    role: nil,
+                    action: onCopyAll
+                )
+
+                optionButton(
+                    title: "chat_options.share".localizable,
+                    assetName: "ChatOptions.Share",
+                    role: nil,
+                    action: onShare
+                )
+
+                optionButton(
+                    title: "chat_options.export".localizable,
+                    assetName: "ChatOptions.Export",
+                    role: nil,
+                    action: onExport
+                )
+
+                optionButton(
+                    title: "chat_options.delete_chat".localizable,
+                    assetName: "ChatOptions.Delete",
+                    role: .destructive,
+                    action: onDelete
+                )
+            }
+            .padding(.top, firstButtonTopInset)
+            .padding(.horizontal, buttonsHorizontalInset)
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    private var header: some View {
+        HStack(spacing: 0) {
+            Text("chat_options.title".localizable)
+                .font(Tokens.Font.regular16)
+                .foregroundStyle(Color.white)
+
+            Spacer(minLength: 0)
+
+            Button(action: onClose) {
+                Image("ChatOptions.Close")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: closeSize, height: closeSize)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.top, -40.scale)
+        .padding(.horizontal, headerHorizontalInset)
+        .frame(height: headerHeight)
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(Color.black.opacity(dividerOpacity))
+            .frame(height: onePixel)
+            .frame(maxWidth: .infinity)
+    }
+
+    private var onePixel: CGFloat {
+        1.0 / UIScreen.main.scale
+    }
+
+    private func optionButton(
+        title: String,
+        assetName: String,
+        role: ButtonRole?,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            HStack(spacing: 12.scale) {
+                Image(assetName)
+                    .resizable()
+                    .renderingMode(.template)
+                    .scaledToFit()
+                    .frame(width: iconSize, height: iconSize)
+                    .foregroundStyle(.white)
+                    .padding(.leading, iconLeadingInset)
+
+                Text(title)
+                    .font(Tokens.Font.regular17)
+                    .foregroundStyle(.white)
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: buttonHeight)
+            .background(
+                RoundedRectangle(cornerRadius: buttonCornerRadius, style: .continuous)
+                    .fill(Tokens.Color.accentGradient)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ChatContainerView/MessageAttachmentChip.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+
+// MARK: - Attachment chip inside message bubble
+
+ struct MessageAttachmentChip: View {
+    let kind: ChatMessage.AttachmentKind
+    let title: String
+    let subtitle: String
+
+    private var iconName: String {
+        switch kind {
+        case .image: return "photo"
+        case .file:  return "doc"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 10.scale) {
+            Image(systemName: iconName)
+                .font(.system(size: 16.scale, weight: .semibold))
+                .foregroundStyle(.white)
+
+            VStack(alignment: .leading, spacing: 2.scale) {
+                Text(title)
+                    .font(.system(size: 13.scale, weight: .semibold))
+                    .foregroundStyle(Tokens.Color.textPrimary)
+                    .lineLimit(1)
+
+                Text(subtitle)
+                    .font(.system(size: 11.scale, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 10.scale)
+        .padding(.horizontal, 12.scale)
+        .background(Color.black.opacity(0.2))
+        .clipShape(RoundedRectangle(cornerRadius: 16.scale, style: .continuous))
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ChatContainerView/TokensColor.swift
+////////////////////////////////////////////////////////////
+
+
+
+
+import SwiftUI
+
+// MARK: - Local colors for chat design
+
+enum TokensColor {
+    static let chatBackground = Color(hex:"#101623")!
+
+    static let userBubble = Color(hex:"#202020")!
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: ChatMessage.swift
+////////////////////////////////////////////////////////////
+
+
+import Foundation
+
+public struct ChatMessage: Identifiable, Equatable, Sendable {
+
+    public enum Role: String, Sendable {
+        case user
+        case assistant
+        case system
+    }
+
+    public enum AttachmentKind: String, Sendable {
+        case image
+        case file
+    }
+
+    public struct AttachmentPreview: Identifiable, Equatable, Sendable {
+        public let id: String
+        public let kind: AttachmentKind
+        public let filename: String
+        public let sizeBytes: Int
+
+        public init(
+            id: String = UUID().uuidString,
+            kind: AttachmentKind,
+            filename: String,
+            sizeBytes: Int
+        ) {
+            self.id = id
+            self.kind = kind
+            self.filename = filename
+            self.sizeBytes = sizeBytes
+        }
+    }
+
+    public let id: UUID
+    public let role: Role
+    public let text: String
+    public let createdAt: Date
+    public let attachments: [AttachmentPreview]
+
+    public init(
+        id: UUID = UUID(),
+        role: Role,
+        text: String,
+        createdAt: Date = Date(),
+        attachments: [AttachmentPreview] = []
+    ) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.createdAt = createdAt
+        self.attachments = attachments
+    }
+
+    public init(
+        id: UUID = UUID(),
+        role: Role,
+        text: String,
+        createdAt: Date = Date()
+    ) {
+        self.init(id: id, role: role, text: text, createdAt: createdAt, attachments: [])
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: KeyboardDismiss+Helpers.swift
+////////////////////////////////////////////////////////////
+
+
+
+import UIKit
+
+extension UIApplication {
+    static func dismissKeyboard() {
+        shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                          to: nil,
+                          from: nil,
+                          for: nil)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: OpenAITextChatView/OpenAITextChatView.swift
+////////////////////////////////////////////////////////////
+
+// FILE: OpenAIChat/ChatScenes/OpenAITextChatView.swift
+
+import SwiftUI
+import PhotosUI
+import UniformTypeIdentifiers
+import Swinject
+import UIKit
+
+public struct OpenAITextChatView: View {
+
+    @Environment(\.resolver) public var resolver
+    @Environment(\.dismiss) public var dismiss
+
+    @EnvironmentObject private var purchaseManager: PurchaseManager
+    @StateObject public var vm: OpenAITextChatViewModel
+
+    @State public var photoPickerItems: [PhotosPickerItem] = []
+    @State public var isPhotoPickerPresented: Bool = false
+    @State public var showFileImporter: Bool = false
+
+    // MARK: - Prefill (Quick Actions)
+
+    public let initialText: String?
+    public let autoSendInitialText: Bool
+    @State public var didApplyInitialText: Bool = false
+
+    // MARK: - Chat options / share
+
+    @State public var isOptionsPresented: Bool = false
+
+    @State public var shareItems: [Any] = []
+    @State public var isSharePresented: Bool = false
+
+    @State public var exportedTempDirectoryURL: URL?
+    @State public var exportedTempZipURL: URL?
+
+    // MARK: - RateUs -> Support Email (present AFTER RateUs dismiss)
+
+    @State private var shouldOpenRateUsEmailAfterDismiss: Bool = false
+    @State private var isRateUsSupportMailPresented: Bool = false
+    @State private var rateUsSupportMailPayload: MailComposerPayload? = nil
+
+    public init(
+        vm: OpenAITextChatViewModel,
+        initialText: String? = nil,
+        autoSendInitialText: Bool = false
+    ) {
+        _vm = StateObject(wrappedValue: vm)
+        self.initialText = initialText
+        self.autoSendInitialText = autoSendInitialText
+    }
+
+    public var body: some View {
+        ChatContainerView(
+            title: "Chat",
+            messages: vm.messages,
+            isLoading: vm.isLoading,
+            errorText: vm.errorText,
+            onTapMore: { isOptionsPresented = true }
+        ) {
+            inputBar
+        }
+        .task {
+            guard didApplyInitialText == false else { return }
+            didApplyInitialText = true
+
+            let text = (initialText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard text.isEmpty == false else { return }
+
+            vm.inputText = text
+
+            if autoSendInitialText {
+                vm.send()
+            }
+        }
+        .onChange(of: vm.didHitDailyLimit) { hit in
+            guard hit else { return }
+
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 секунды
+                guard purchaseManager.isShowedPaywall == false else { return }
+                purchaseManager.isShowedPaywall = true
+            }
+        }
+        .onChange(of: vm.shouldShowRateUs) { should in
+            guard should else { return }
+            hideKeyboard()
+            RateAskScheduler.shared.markAskShown()
+
+            #if DEBUG
+            print("⭐️ RateUs: presenting from OpenAITextChat")
+            #endif
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    vm.cancel()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Tokens.Color.textSecondary)
+                }
+                .opacity(vm.isLoading ? 1 : 0)
+                .disabled(!vm.isLoading)
+            }
+        }
+        .fileImporter(
+            isPresented: $showFileImporter,
+            allowedContentTypes: [.pdf],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                urls.forEach { vm.addFileURL($0) }
+            case .failure(let error):
+                vm.cancel()
+                print("File importer error: \(error)")
+            }
+        }
+        .photosPicker(
+            isPresented: $isPhotoPickerPresented,
+            selection: $photoPickerItems,
+            maxSelectionCount: 10,
+            matching: .images
+        )
+        .onChange(of: photoPickerItems) { newItems in
+            guard !newItems.isEmpty else { return }
+            Task {
+                for item in newItems {
+                    do {
+                        if let data = try await item.loadTransferable(type: Data.self) {
+                            vm.addImageData(data)
+                        }
+                    } catch {
+                        print("PhotosPicker load error: \(error)")
+                    }
+                }
+                photoPickerItems.removeAll()
+            }
+        }
+        .overlay {
+            if isOptionsPresented {
+                ChatOptionsOverlay(
+                    isPresented: $isOptionsPresented,
+                    onCopyAll: {
+                        copyWholeChat()
+                        isOptionsPresented = false
+                    },
+                    onShare: {
+                        shareChatAsZip()
+                        isOptionsPresented = false
+                    },
+                    onExport: {
+                        exportChatToFile()
+                        isOptionsPresented = false
+                    },
+                    onDelete: {
+                        isOptionsPresented = false
+                        deleteChatLocal()
+                    },
+                    onClose: { isOptionsPresented = false }
+                )
+                .transition(.opacity)
+                .zIndex(999)
+            }
+        }
+        .sheet(isPresented: $isSharePresented, onDismiss: cleanupShareTempIfNeeded) {
+            ActivityView(activityItems: shareItems)
+        }
+        .fullScreenCover(
+            isPresented: $vm.shouldShowRateUs,
+            onDismiss: {
+                guard shouldOpenRateUsEmailAfterDismiss else { return }
+                shouldOpenRateUsEmailAfterDismiss = false
+                prepareAndPresentRateUsEmail()
+            },
+            content: {
+                RateUsView { action in
+                    hideKeyboard()
+
+                    switch action {
+                    case .liked:
+                        RateAskScheduler.shared.markRated()
+                        vm.onRateUsClosed(liked: true)
+
+                    case .laterOpenEmail:
+                        vm.onRateUsClosed(liked: false)
+                        shouldOpenRateUsEmailAfterDismiss = true
+
+                    case .laterJustClose:
+                        vm.onRateUsClosed(liked: false)
+                    }
+                }
+                .environment(\.dynamicTypeSize, .medium)
+                .ignoresSafeArea()
+            }
+        )
+        .sheet(isPresented: $isRateUsSupportMailPresented) {
+            if let payload = rateUsSupportMailPayload {
+                MailComposerView(payload: payload)
+            } else {
+                VStack(spacing: 12) {
+                    Text("rateus.support.mail_prepare_failed".localizable)
+                    Button("common.ok".localizable) {
+                        isRateUsSupportMailPresented = false
+                    }
+                }
+                .padding()
+            }
+        }
+    }
+
+    // MARK: - RateUs email
+
+    private func prepareAndPresentRateUsEmail() {
+        let diagnostics = AppDiagnostics.makeSupportDiagnosticsText()
+        let body = String(
+            format: "rateus.support.email_body_template".localizable,
+            diagnostics
+        )
+
+        rateUsSupportMailPayload = MailComposerPayload(
+            to: "dete8489@gmail.com",
+            subject: "rateus.support.email_subject".localizable,
+            body: body,
+            isHTML: false,
+            fallbackMailToURL: MailComposerPayload.makeMailToURL(
+                to: "dete8489@gmail.com",
+                subject: "rateus.support.email_subject".localizable,
+                body: body
+            )
+        )
+
+        isRateUsSupportMailPresented = true
+    }
+}
+
+
+// MARK: - Overlay (dim fades, sheet slides)
+
+private struct ChatOptionsOverlay: View {
+
+    @Binding var isPresented: Bool
+
+    let onCopyAll: () -> Void
+    let onShare: () -> Void
+    let onExport: () -> Void
+    let onDelete: () -> Void
+    let onClose: () -> Void
+
+    @State private var appear: Bool = false
+
+    private let cornerRadius: CGFloat = 24.scale
+    private let sheetHeight: CGFloat = 415.scale
+
+    var body: some View {
+        ZStack {
+            Color.black
+                .opacity(appear ? 0.35 : 0.0)
+                .ignoresSafeArea()
+                .onTapGesture { close() }
+                .animation(.easeOut(duration: 0.18), value: appear)
+
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+
+                ChatOptionsSheet(
+                    onCopyAll: onCopyAll,
+                    onShare: onShare,
+                    onExport: onExport,
+                    onDelete: onDelete,
+                    onClose: close
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: sheetHeight)
+                .background(
+                    Tokens.Color.chatOptionsSheetBackground
+                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                )
+                .offset(y: appear ? 0 : (sheetHeight + 40.scale))
+                .animation(.spring(response: 0.30, dampingFraction: 0.92), value: appear)
+            }
+            .ignoresSafeArea(edges: .bottom)
+        }
+        .onAppear { appear = true }
+    }
+
+    private func close() {
+        appear = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+            isPresented = false
+            onClose()
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: OpenAITextChatView/OpenAITextChatView+Actions.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+import UIKit
+import Foundation
+import ZIPFoundation
+
+extension OpenAITextChatView {
+
+    // MARK: - Actions
+
+    func copyWholeChat() {
+        let text = buildTranscriptText()
+        UIPasteboard.general.string = text
+
+        #if DEBUG
+        print("📋 CHAT: copied \(text.count) chars")
+        #endif
+    }
+
+    func shareChatAsZip() {
+        do {
+            let (dirURL, zipURL) = try buildZipExport()
+            exportedTempDirectoryURL = dirURL
+            exportedTempZipURL = zipURL
+
+            shareItems = [zipURL]
+            isSharePresented = true
+
+            #if DEBUG
+            print("🗜️ CHAT: share zip \(zipURL.lastPathComponent) size=\((try? Data(contentsOf: zipURL).count) ?? -1)")
+            #endif
+        } catch {
+            vm.errorText = String(
+                format: "openai_chat.error.zip_prepare".localizable,
+                String(describing: error)
+            )
+        }
+    }
+
+    func shareChatText() {
+        let text = buildTranscriptText()
+        shareItems = [text]
+        isSharePresented = true
+    }
+
+    func exportChatToFile() {
+        let text = buildTranscriptText()
+        let filename = makeExportFilename()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            shareItems = [url]
+            isSharePresented = true
+
+            #if DEBUG
+            print("📦 CHAT: exported to \(url)")
+            #endif
+        } catch {
+            vm.errorText = String(
+                format: "openai_chat.error.export_chat".localizable,
+                String(describing: error)
+            )
+        }
+    }
+
+    func cleanupShareTempIfNeeded() {
+        if let zipURL = exportedTempZipURL {
+            exportedTempZipURL = nil
+            try? FileManager.default.removeItem(at: zipURL)
+        }
+
+        if let dirURL = exportedTempDirectoryURL {
+            exportedTempDirectoryURL = nil
+            try? FileManager.default.removeItem(at: dirURL)
+        }
+    }
+
+    func deleteChatLocal() {
+        Task { [resolver] in
+            let get = resolver.resolve(GetChatThreadUseCase.self)
+            let del = resolver.resolve(DeleteChatThreadUseCase.self)
+
+            guard let get, let del else {
+                await MainActor.run {
+                    vm.errorText = "openai_chat.error.di_missing_usecases".localizable
+                }
+                return
+            }
+
+            guard let conversationId = vm.currentConversationId else {
+                await MainActor.run {
+                    vm.errorText = "openai_chat.error.no_conversation_id".localizable
+                }
+                return
+            }
+
+            if let thread = try? await get.execute(conversationId: conversationId) {
+                try? await del.execute(threadId: thread.id)
+            }
+
+            await MainActor.run { dismiss() }
+        }
+    }
+}
+
+// MARK: - ZIP build
+
+private extension OpenAITextChatView {
+
+    func buildZipExport() throws -> (directoryURL: URL, zipURL: URL) {
+        let baseName = makeZipBaseName()
+
+        let dirURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openai_chat_export_\(UUID().uuidString)", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
+
+        let transcriptURL = dirURL.appendingPathComponent("transcript.txt")
+        let text = buildTranscriptText()
+        try text.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let zipURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(baseName).zip")
+        try? FileManager.default.removeItem(at: zipURL)
+
+        try FileManager.default.zipItem(at: dirURL, to: zipURL, shouldKeepParent: true)
+
+        return (dirURL, zipURL)
+    }
+
+    func makeZipBaseName() -> String {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let stamp = df.string(from: Date())
+
+        let cid = vm.currentConversationId ?? "local"
+        let short = String(cid.prefix(8))
+
+        return "openai_chat_\(short)_\(stamp)"
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: OpenAITextChatView/OpenAITextChatView+InputBar.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+import PhotosUI
+
+extension OpenAITextChatView {
+
+    // MARK: - Input Bar (mic / send)
+
+    var inputBar: some View {
+        VStack(spacing: 10.scale) {
+
+            if !vm.pendingAttachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8.scale) {
+                        ForEach(vm.pendingAttachments) { item in
+                            PendingAttachmentChip(
+                                title: item.prepared.filename,
+                                subtitle: formatBytes(item.prepared.sizeBytes),
+                                onRemove: { vm.removePendingAttachment(id: item.id) }
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 16.scale)
+                }
+            }
+
+            HStack(spacing: 12.scale) {
+
+                Menu {
+                    Button { isPhotoPickerPresented = true } label: {
+                        Label("openai_chat.input.menu.photo".localizable, systemImage: "photo")
+                    }
+
+                    Button { showFileImporter = true } label: {
+                        Label("openai_chat.input.menu.file".localizable, systemImage: "doc")
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 20.scale, weight: .semibold))
+                        .foregroundStyle(Tokens.Color.textSecondary)
+                        .frame(width: 36.scale, height: 36.scale)
+                        .contentShape(Rectangle())
+                }
+                .tint(.black)
+                .disabled(vm.isLoading)
+
+                
+                ZStack(alignment: .leading) {
+                    TextField(
+                        "",
+                        text: $vm.inputText,
+                
+                        prompt: Text("openai_chat.input.placeholder".localizable)
+                            .font(Tokens.Font.medium17)
+                            .foregroundStyle(Color.white.opacity(0.70)) ,
+                        axis: .vertical,
+                    )
+                    .textFieldStyle(.plain)
+                    .font(Tokens.Font.medium17)
+                    .foregroundStyle(Color.white) // <- цвет вводимого текста
+                    .lineLimit(1...6)
+                    .disabled(vm.isLoading)
+
+                    if vm.isRecordingSpeech {
+                        HStack(spacing: 8.scale) {
+                            Spacer(minLength: 0)
+                            Text(vm.speechTimerText)
+                                .font(Tokens.Font.semibold11)
+                                .monospacedDigit()
+                                .foregroundStyle(Tokens.Color.textSecondary)
+                                .padding(.horizontal, 6.scale)
+                                .padding(.vertical, 4.scale)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Color.black.opacity(0.06))
+                                )
+                        }
+                        .allowsHitTesting(false)
+                    }
+                }
+
+                Button {
+                    if vm.shouldShowSendButton {
+                        vm.send()
+                    } else {
+                        Task { await vm.toggleSpeech() }
+                    }
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(rightButtonFill)
+                            .frame(width: 36.scale, height: 36.scale)
+
+                        rightButtonIcon
+                    }
+                }
+                .disabled(vm.isLoading || vm.isRightButtonDisabled)
+            }
+            .padding(.horizontal, 16.scale)
+            .frame(minHeight: 64.scale)
+            .background(
+                RoundedRectangle(cornerRadius: 22.scale, style: .continuous)
+                    .fill(Color(hex:"#202020")!)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22.scale, style: .continuous)
+                    .stroke(Tokens.Color.textSecondary.opacity(0.18), lineWidth: 1)
+            )
+            .padding(.horizontal, 16.scale)
+            .padding(.vertical, 10.scale)
+        }
+        .background(TokensColor.chatBackground)
+    }
+
+    var rightButtonFill: Color {
+        if vm.isRecordingSpeech { return Tokens.Color.accent }
+        if vm.shouldShowSendButton {
+            return vm.isSendEnabled ? Tokens.Color.accent : Tokens.Color.textSecondary.opacity(0.20)
+        }
+        return Tokens.Color.accent
+    }
+
+    @ViewBuilder
+    var rightButtonIcon: some View {
+        if vm.isRecordingSpeech {
+            Image(systemName: "stop.fill")
+                .font(.system(size: 14.scale, weight: .bold))
+                .foregroundStyle(Color.white)
+        } else if vm.shouldShowSendButton {
+            Image(systemName: "paperplane.fill")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 18.scale, height: 18.scale)
+                .foregroundStyle(Color.white)
+                .opacity(vm.isSendEnabled ? 1 : 0.65)
+        } else {
+            Image("mic")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 36.scale, height: 36.scale)
+                .foregroundStyle(Color.white)
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: OpenAITextChatView/OpenAITextChatView+Transcript.swift
+////////////////////////////////////////////////////////////
+
+
+
+import SwiftUI
+
+extension OpenAITextChatView {
+
+    // MARK: - Transcript helpers
+
+    func buildTranscriptText() -> String {
+        let blocks: [String] = vm.messages.map { msg in
+            let role: String = {
+                switch msg.role {
+                case .system: return "SYSTEM"
+                case .user: return "USER"
+                case .assistant: return "ASSISTANT"
+                }
+            }()
+
+            var text = "[\(role)] \(msg.text)".trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if msg.attachments.isEmpty == false {
+                let attLines = msg.attachments.map { att in
+                    "• \(att.filename) (\(formatBytes(att.sizeBytes)))"
+                }
+                .joined(separator: "\n")
+
+                if text.isEmpty { text = "[\(role)]" }
+                text += "\n" + attLines
+            }
+
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return blocks
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+    }
+
+    func makeExportFilename() -> String {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let stamp = df.string(from: Date())
+
+        let cid = vm.currentConversationId ?? "local"
+        let short = String(cid.prefix(8))
+
+        return "chat_\(short)_\(stamp).txt"
+    }
+
+    func formatBytes(_ bytes: Int) -> String {
+        let kb = Double(bytes) / 1024.0
+        if kb < 1024.0 { return String(format: "%.0f KB", kb) }
+        let mb = kb / 1024.0
+        return String(format: "%.1f MB", mb)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: OpenAITextChatView/PendingAttachmentChip.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+
+struct PendingAttachmentChip: View {
+    let title: String
+    let subtitle: String
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8.scale) {
+            VStack(alignment: .leading, spacing: 2.scale) {
+                Text(title)
+                    .font(Tokens.Font.medium13)
+                    .foregroundStyle(Tokens.Color.textPrimary)
+                    .lineLimit(1)
+
+                Text(subtitle)
+                    .font(Tokens.Font.regular11)
+                    .foregroundStyle(Tokens.Color.textSecondary)
+                    .lineLimit(1)
+            }
+
+            Button { onRemove() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Tokens.Color.textSecondary)
+            }
+        }
+        .padding(.vertical, 8.scale)
+        .padding(.horizontal, 10.scale)
+        .background(
+            RoundedRectangle(cornerRadius: Tokens.Radius.medium)
+                .fill(Color(hex:"#202020")!)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Tokens.Radius.medium)
+                .stroke(Tokens.Color.textSecondary.opacity(0.15), lineWidth: 1)
+        )
+    }
+}
+
+

@@ -116,15 +116,6 @@ struct TextToVideoFlowView: View {
                 .zIndex(30)
             }
         }
-        .overlay {
-            if viewModel.isTokensPaywallPresented {
-                TokensPaywallView {
-                    viewModel.dismissTokensPaywall()
-                }
-                .environmentObject(purchaseManager)
-                .zIndex(40)
-            }
-        }
         .animation(.easeInOut(duration: 0.24), value: viewModel.route)
         .onAppear {
             viewModel.onAppear()
@@ -135,6 +126,21 @@ struct TextToVideoFlowView: View {
         .onChange(of: viewModel.route) { _, route in
             guard route == .result else { return }
             rateUsScheduler.registerSuccessfulResult()
+        }
+        .fullScreenCover(
+            isPresented: Binding(
+                get: { viewModel.isTokensPaywallPresented },
+                set: { isPresented in
+                    if !isPresented {
+                        viewModel.dismissTokensPaywall()
+                    }
+                }
+            )
+        ) {
+            TokensPaywallView {
+                viewModel.dismissTokensPaywall()
+            }
+            .environmentObject(purchaseManager)
         }
         .fullScreenCover(
             isPresented: Binding(

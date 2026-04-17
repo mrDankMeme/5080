@@ -1,0 +1,1091 @@
+////////////////////////////////////////////////////////////
+// FILE: TextToImageChatView.swift
+////////////////////////////////////////////////////////////
+
+// FILE: TextToImageChatView.swift
+
+import SwiftUI
+
+struct TextToImageChatView: View {
+
+    @EnvironmentObject private var purchaseManager: PurchaseManager
+    @StateObject private var vm: TextToImageChatViewModel
+
+    init(vm: TextToImageChatViewModel) {
+        _vm = StateObject(wrappedValue: vm)
+    }
+
+    var body: some View {
+        GenerationChatContainerView(
+            title: "text_to_image.title".localizable,
+            modeTitle: "text_to_image.title".localizable,
+            messages: vm.messages,
+            isLoading: vm.isLoading,
+            errorText: vm.errorText,
+            threadId: vm.threadId,
+            historyRepo: vm.historyRepoForViewer,
+            mediaCache: vm.mediaCacheForViewer,
+            onMessageUpdated: { updated in
+                vm.applyMessageUpdateFromViewer(updated)
+            }
+        ) {
+            GenerationChatComposerView(
+                showsPlus: false,
+                isLoading: vm.isLoading,
+                text: $vm.prompt,
+                attachmentImage: nil,
+                onPickPhotoTap: {
+                },
+                onMicTap: {
+                },
+                onSendTap: {
+                    let clean = vm.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !clean.isEmpty else { return }
+
+                    vm.onGenerateTap()
+
+                    vm.prompt = ""
+                }
+            )
+        }
+        .onChange(of: vm.shouldShowPaywall) { should in
+            guard should else { return }
+
+            // ⚠️ VM делает "сигнал", UI делает роутинг.
+            purchaseManager.isShowedPaywall = true
+            vm.consumePaywallSignal()
+
+            #if DEBUG
+            print("💎 GEN(TextToImage): show paywall from gate (kind=\(purchaseManager.currentSubKind))")
+            #endif
+        }
+        .alert(item: $vm.limitAlert) { item in
+            Alert(
+                title: Text(item.title),
+                message: Text(item.message),
+                dismissButton: .default(Text(item.buttonTitle))
+            )
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: TextToImageChatViewModel/TextToImageChatViewModel.swift
+////////////////////////////////////////////////////////////
+
+// FILE: TextToImageChatViewModel/TextToImageChatViewModel.swift
+
+import Foundation
+
+@MainActor
+final class TextToImageChatViewModel: ObservableObject {
+
+    // MARK: - Thread
+
+    let threadId: UUID
+    let kind: GenerationKind = .textToImage
+    let shouldLoadHistory: Bool
+
+    // MARK: - UI
+
+    @Published var messages: [GenerationMessage] = [
+        GenerationMessage(
+            role: .system,
+            createdAt: Date(),
+            payload: .system("text_to_image.system.write_prompt".localizable)
+        )
+    ]
+
+    @Published var prompt: String = ""
+    @Published var templateIdText: String = "0"
+
+    @Published var isLoading: Bool = false
+    @Published var errorText: String?
+    @Published var lastResultURL: URL?
+
+    // ✅ Gate outputs (UI reacts)
+    @Published var shouldShowPaywall: Bool = false
+    @Published var limitAlert: LimitAlertItem? = nil
+
+    // MARK: - Dependencies
+
+    let useCase: GenerateImageFromTextUseCase
+    let historyRepo: GenerationHistoryRepository
+    let mediaCache: MediaCacheService
+    let internalNotifications: InternalNotificationCenter
+    let requestCounter: RequestCounterService
+
+    let pendingService: PendingGenerationService
+    let updateCenter: GenerationThreadUpdateCenter
+
+    var historyRepoForViewer: GenerationHistoryRepository { historyRepo }
+    var mediaCacheForViewer: MediaCacheService { mediaCache }
+
+    // MARK: - Tasks
+
+    var task: Task<Void, Never>?
+    var historyTask: Task<Void, Never>?
+
+    var activeGenerationMessageId: UUID?
+    var activeGenerationId: UUID?
+
+    var eagerRecoveryTask: Task<Void, Never>?
+    var eagerRecoveryInFlight: Set<UUID> = []
+
+    private var updatesTask: Task<Void, Never>?
+    private var lastReloadAt: Date = .distantPast
+
+    // MARK: - Subscription snapshot provider (injected from factory)
+
+    typealias SubscriptionSnapshot = (isSubscribed: Bool, kind: SubscriptionKind)
+
+    private var subscriptionSnapshotProvider: (@Sendable () -> SubscriptionSnapshot)?
+
+    func setSubscriptionSnapshotProvider(_ provider: @escaping @Sendable () -> SubscriptionSnapshot) {
+        self.subscriptionSnapshotProvider = provider
+    }
+
+    // MARK: - Alert item
+
+    struct LimitAlertItem: Identifiable, Equatable {
+        let id: String = UUID().uuidString
+        let title: String
+        let message: String
+        let buttonTitle: String
+    }
+
+    // MARK: - Anti-spam (DEBUG)
+
+    private static let debugImageParallelLimit: Int = .max
+
+    // MARK: - Init
+
+    init(
+        threadId: UUID? = nil,
+        useCase: GenerateImageFromTextUseCase,
+        historyRepo: GenerationHistoryRepository,
+        mediaCache: MediaCacheService,
+        internalNotifications: InternalNotificationCenter,
+        requestCounter: RequestCounterService,
+        pendingService: PendingGenerationService,
+        updateCenter: GenerationThreadUpdateCenter
+    ) {
+        self.threadId = threadId ?? UUID()
+        self.shouldLoadHistory = (threadId != nil)
+
+        self.useCase = useCase
+        self.historyRepo = historyRepo
+        self.mediaCache = mediaCache
+        self.internalNotifications = internalNotifications
+        self.requestCounter = requestCounter
+        self.pendingService = pendingService
+        self.updateCenter = updateCenter
+
+        if shouldLoadHistory {
+            ensureThreadRegistered()
+            loadHistoryIfExists()
+            subscribeToThreadUpdates()
+        }
+    }
+
+    deinit {
+        task?.cancel()
+        historyTask?.cancel()
+        eagerRecoveryTask?.cancel()
+        updatesTask?.cancel()
+    }
+
+    func applyMessageUpdateFromViewer(_ updated: GenerationMessage) {
+        replaceGenerationMessageInUI(updated: updated)
+    }
+
+    func showUserError(_ text: String) {
+        errorText = text
+    }
+
+    func consumePaywallSignal() {
+        shouldShowPaywall = false
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+
+        if let gid = activeGenerationId {
+            Task { [pendingService] in
+                await pendingService.remove(generationId: gid)
+            }
+        }
+
+        isLoading = false
+        activeGenerationMessageId = nil
+        activeGenerationId = nil
+    }
+
+    private func subscribeToThreadUpdates() {
+        updatesTask?.cancel()
+
+        updatesTask = Task { [weak self] in
+            guard let self else { return }
+
+            let stream = await self.updateCenter.stream()
+
+            for await updatedThreadId in stream {
+                if Task.isCancelled { break }
+                guard updatedThreadId == self.threadId else { continue }
+
+                let now = Date()
+                if now.timeIntervalSince(self.lastReloadAt) < 0.35 { continue }
+                self.lastReloadAt = now
+
+                await MainActor.run {
+                    self.loadHistoryIfExists()
+                    self.startEagerRecoveryIfNeeded()
+                }
+            }
+        }
+    }
+
+    // MARK: - Notifications (Variant A)
+
+    func markNotificationsAsReadForThisThreadIfNeeded() {
+        guard shouldLoadHistory else { return }
+
+        Task {
+            let list = await internalNotifications.list()
+
+            let targets = list.filter { n in
+                n.isRead == false
+                && n.payload.threadId == self.threadId
+                && n.payload.generationKind == self.kind
+            }
+
+            guard targets.isEmpty == false else { return }
+
+            for n in targets {
+                await internalNotifications.markRead(id: n.id)
+            }
+
+            #if DEBUG
+            print("🔔 GEN(TextToImage): marked read \(targets.count) notifications for threadId=\(self.threadId)")
+            #endif
+        }
+    }
+
+    // MARK: - Gate (now via shared helper)
+
+    func evaluateGate(snapshot: RequestCounterSnapshot) -> GenerationGateDecision {
+        let sub = subscriptionSnapshotProvider?() ?? (false, .unknown)
+        return GenerationLimitGate.evaluate(
+            isSubscribed: sub.isSubscribed,
+            kind: sub.kind,
+            snapshot: snapshot
+        )
+    }
+
+    // MARK: - Debug limit helper
+
+    static func validateParallelLimit(snapshot: RequestCounterSnapshot) -> Bool {
+        snapshot.image < debugImageParallelLimit
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: TextToImageChatViewModel/TextToImageChatViewModel+Actions.swift
+////////////////////////////////////////////////////////////
+
+// FILE: TextToImageChatViewModel/TextToImageChatViewModel+Actions.swift
+
+import Foundation
+
+extension TextToImageChatViewModel {
+
+    func onGenerateTap() {
+        let cleanPrompt = self.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let templateId = Int(self.templateIdText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+
+        guard !cleanPrompt.isEmpty else {
+            showUserError("text_to_image.error.empty_prompt".localizable)
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            let snap = await self.requestCounter.snapshot()
+
+            // ✅ STEP 2: common gate helper
+            let gate = self.evaluateGate(snapshot: snap)
+            switch gate {
+            case .allow:
+                break
+            case .showPaywall:
+                self.shouldShowPaywall = true
+                return
+            case .showAlert(let title, let message):
+                self.limitAlert = LimitAlertItem(
+                    title: title,
+                    message: message,
+                    buttonTitle: "OK"
+                )
+                return
+            }
+
+//            if Self.validateParallelLimit(snapshot: snap) == false {
+//                self.showUserError("text_to_image.error.parallel_limit".localizable)
+//                return
+//            }
+
+            self.errorText = nil
+            self.isLoading = true
+
+            let now = Date()
+
+            let userMsg = GenerationMessage(
+                role: .user,
+                createdAt: now,
+                payload: .text(cleanPrompt)
+            )
+            self.messages.append(userMsg)
+
+            self.persistUserPromptToHistory(cleanPrompt, createdAt: now)
+
+            let placeholderId = UUID()
+            self.activeGenerationMessageId = placeholderId
+
+            let placeholderRemote = URL(string: "https://example.com/image.jpg")!
+            let placeholderMsg = GenerationMessage(
+                id: placeholderId,
+                role: .assistant,
+                createdAt: now,
+                payload: .image(remoteURL: placeholderRemote, localURL: nil)
+            )
+
+            self.replaceGenerationMessageInUI(updated: placeholderMsg)
+            self.persistAssistantMediaPlaceholderToHistory(
+                message: placeholderMsg,
+                preview: "text_to_image.preview.generating".localizable
+            )
+
+            self.task?.cancel()
+            self.task = Task { [weak self] in
+                guard let self else { return }
+                defer { self.isLoading = false }
+
+                do {
+                    let started = try await self.useCase.start(prompt: cleanPrompt, templateId: templateId)
+                    try Task.checkCancellation()
+
+                    let generationId = started.id
+                    let counterJobId = generationId.uuidString
+
+                    self.activeGenerationId = generationId
+
+                    let record = PendingGenerationRecord(
+                        generationId: generationId,
+                        counterJobId: counterJobId,
+                        threadId: self.threadId,
+                        placeholderMessageId: placeholderId,
+                        generationKind: .textToImage,
+                        category: .image,
+                        createdAt: now
+                    )
+
+                    await self.pendingService.upsert(record)
+
+                    #if DEBUG
+                    print("🧾 PENDING +1 kind=textToImage threadId=\(self.threadId) generationId=\(generationId) placeholderId=\(placeholderId)")
+                    #endif
+
+                    let dto = try await self.useCase.poll(started: started)
+                    try Task.checkCancellation()
+
+                    guard self.activeGenerationMessageId == placeholderId else { return }
+
+                    let raw = (dto.result ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    if dto.status == .done, let url = extractURL(raw) {
+                        self.lastResultURL = url
+
+                        await self.requestCounter.commitSuccess(category: .image, jobId: counterJobId)
+
+                        await self.updateImagePlaceholderRemote(messageId: placeholderId, remoteURL: url)
+                        await self.downloadAndFinalizeImage(messageId: placeholderId, remoteURL: url)
+
+                        await self.pendingService.remove(generationId: generationId)
+                        await self.updateCenter.post(threadId: self.threadId)
+
+                        self.activeGenerationId = nil
+                        return
+                    }
+
+                    if dto.status == .failed, let url = extractURL(raw) {
+                        self.lastResultURL = url
+
+                        await self.requestCounter.commitSuccess(category: .image, jobId: counterJobId)
+
+                        await self.updateImagePlaceholderRemote(messageId: placeholderId, remoteURL: url)
+                        await self.downloadAndFinalizeImage(messageId: placeholderId, remoteURL: url)
+
+                        await self.pendingService.remove(generationId: generationId)
+                        await self.updateCenter.post(threadId: self.threadId)
+
+                        self.activeGenerationId = nil
+                        return
+                    }
+
+                    if dto.status == .failed {
+                        let reason = (dto.error ?? "failed").trimmingCharacters(in: .whitespacesAndNewlines)
+                        let reasonText = reason.isEmpty ? "failed" : reason
+
+                        await self.requestCounter.releaseOnTerminalFail(
+                            category: .image,
+                            jobId: counterJobId,
+                            reason: reasonText
+                        )
+
+                        let assistantText = String(
+                            format: "text_to_image.error.generation_with_reason".localizable,
+                            reasonText
+                        )
+
+                        let failed = GenerationMessage(
+                            id: placeholderId,
+                            role: .assistant,
+                            createdAt: placeholderMsg.createdAt,
+                            payload: .error(assistantText)
+                        )
+
+                        self.replaceGenerationMessageInUI(updated: failed)
+                        try? await self.historyRepo.replaceMessage(
+                            threadId: self.threadId,
+                            messageId: placeholderId,
+                            newMessage: failed
+                        )
+                        self.persistAssistantErrorToHistory(assistantText)
+
+                        await self.pendingService.remove(generationId: generationId)
+                        await self.updateCenter.post(threadId: self.threadId)
+
+                        self.activeGenerationId = nil
+                        return
+                    }
+
+                    if dto.status == .done {
+                        await self.requestCounter.commitSuccess(category: .image, jobId: counterJobId)
+
+                        let printable = raw.isEmpty ? "—" : raw
+
+                        let assistantText = String(
+                            format: "text_to_image.done_result_not_url".localizable,
+                            printable
+                        )
+
+                        let final = GenerationMessage(
+                            id: placeholderId,
+                            role: .assistant,
+                            createdAt: placeholderMsg.createdAt,
+                            payload: .text(assistantText)
+                        )
+
+                        self.replaceGenerationMessageInUI(updated: final)
+                        try? await self.historyRepo.replaceMessage(
+                            threadId: self.threadId,
+                            messageId: placeholderId,
+                            newMessage: final
+                        )
+                        self.persistAssistantTextToHistory(assistantText)
+
+                        await self.pendingService.remove(generationId: generationId)
+                        await self.updateCenter.post(threadId: self.threadId)
+
+                        self.activeGenerationId = nil
+                        return
+                    }
+
+                    #if DEBUG
+                    print("🧾 GEN(TextToImage): poll returned non-terminal status=\(dto.status) generationId=\(generationId)")
+                    #endif
+
+                } catch is CancellationError {
+                    self.lastResultURL = nil
+                    self.errorText = nil
+
+                    let cancelled = GenerationMessage(
+                        id: placeholderId,
+                        role: .system,
+                        createdAt: Date(),
+                        payload: .system("text_to_image.system.cancelled".localizable)
+                    )
+                    self.replaceGenerationMessageInUI(updated: cancelled)
+                    try? await self.historyRepo.replaceMessage(
+                        threadId: self.threadId,
+                        messageId: placeholderId,
+                        newMessage: cancelled
+                    )
+
+                } catch let e as GenerationPollingError {
+                    switch e {
+                    case .timeout:
+                        #if DEBUG
+                        print("🧾 GEN(TextToImage): timeout -> keep pending (no -1)")
+                        #endif
+                        return
+                    default:
+                        break
+                    }
+
+                    let pretty = String(describing: e)
+                    self.errorText = pretty
+
+                } catch {
+                    let pretty = String(describing: error)
+                    self.errorText = pretty
+
+                    let assistantText = String(
+                        format: "text_to_image.error.generic_error".localizable,
+                        pretty
+                    )
+
+                    let failed = GenerationMessage(
+                        id: placeholderId,
+                        role: .assistant,
+                        createdAt: Date(),
+                        payload: .error(assistantText)
+                    )
+                    self.replaceGenerationMessageInUI(updated: failed)
+                    try? await self.historyRepo.replaceMessage(
+                        threadId: self.threadId,
+                        messageId: placeholderId,
+                        newMessage: failed
+                    )
+                    self.persistAssistantErrorToHistory(assistantText)
+                }
+            }
+        }
+    }
+
+    // MARK: - URL helpers
+
+    private func extractURL(_ raw: String) -> URL? {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard s.isEmpty == false else { return nil }
+        guard let url = URL(string: s), url.scheme != nil else { return nil }
+        return url
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: TextToImageChatViewModel/TextToImageChatViewModel+EagerRecovery.swift
+////////////////////////////////////////////////////////////
+
+
+
+import Foundation
+
+extension TextToImageChatViewModel {
+
+
+    func startEagerRecoveryIfNeeded() {
+        guard eagerRecoveryTask == nil else { return }
+
+        eagerRecoveryTask = Task { [weak self] in
+            guard let self else { return }
+            await self.recoverMissingMediaIfNeeded()
+            self.eagerRecoveryTask = nil
+        }
+    }
+
+    func recoverMissingMediaIfNeeded() async {
+        let id = threadId
+        let repo = historyRepo
+
+        let snapshot = messages
+
+        let candidates: [(msg: GenerationMessage, kind: String, remote: URL)] = snapshot.compactMap { msg in
+            switch msg.payload {
+            case .image(let remote, let local):
+                if let local, fileExists(local) { return nil }
+                return (msg, "image", remote)
+
+            case .video(let remote, let local):
+                if let local, fileExists(local) { return nil }
+                return (msg, "video", remote)
+
+            default:
+                return nil
+            }
+        }
+
+        guard candidates.isEmpty == false else {
+            #if DEBUG
+            print("🧾 MEDIA_RECOVERY(open): nothing to recover threadId=\(id)")
+            #endif
+            return
+        }
+
+        #if DEBUG
+        print("🧾 MEDIA_RECOVERY(open): start threadId=\(id) items=\(candidates.count)")
+        #endif
+
+        for c in candidates {
+            if Task.isCancelled { break }
+
+            if eagerRecoveryInFlight.contains(c.msg.id) { continue }
+            eagerRecoveryInFlight.insert(c.msg.id)
+            defer { eagerRecoveryInFlight.remove(c.msg.id) }
+
+            do {
+                let local = try await mediaCache.fetch(
+                    remoteURL: c.remote,
+                    threadId: id,
+                    kind: c.kind
+                )
+                try Task.checkCancellation()
+
+                let updated = makeUpdatedMediaMessage(
+                    original: c.msg,
+                    kind: c.kind,
+                    remoteURL: c.remote,
+                    localURL: local
+                )
+
+                try await repo.replaceMessage(threadId: id, messageId: updated.id, newMessage: updated)
+                replaceGenerationMessageInUI(updated: updated)
+
+                #if DEBUG
+                print("🧾 MEDIA_RECOVERY(open): success threadId=\(id) msgId=\(updated.id) kind=\(c.kind) local=\(local.path)")
+                #endif
+
+            } catch is CancellationError {
+                #if DEBUG
+                print("🧾 MEDIA_RECOVERY(open): cancelled threadId=\(id)")
+                #endif
+                break
+
+            } catch {
+                #if DEBUG
+                print("🚨 MEDIA_RECOVERY(open): failed threadId=\(id) msgId=\(c.msg.id) kind=\(c.kind) error=\(error)")
+                #endif
+            }
+        }
+    }
+
+    func makeUpdatedMediaMessage(
+        original: GenerationMessage,
+        kind: String,
+        remoteURL: URL,
+        localURL: URL
+    ) -> GenerationMessage {
+        switch kind {
+        case "image":
+            return GenerationMessage(
+                id: original.id,
+                role: original.role,
+                createdAt: original.createdAt,
+                payload: .image(remoteURL: remoteURL, localURL: localURL)
+            )
+        case "video":
+            return GenerationMessage(
+                id: original.id,
+                role: original.role,
+                createdAt: original.createdAt,
+                payload: .video(remoteURL: remoteURL, localURL: localURL)
+            )
+        default:
+            return original
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: TextToImageChatViewModel/TextToImageChatViewModel+HistoryLoad.swift
+////////////////////////////////////////////////////////////
+
+
+import Foundation
+
+extension TextToImageChatViewModel {
+
+    func loadHistoryIfExists() {
+        let repo = historyRepo
+        let id = threadId
+
+        historyTask?.cancel()
+        historyTask = Task { [weak self] in
+            guard let self else { return }
+
+            do {
+                let stored = try await repo.loadMessages(threadId: id)
+                guard stored.isEmpty == false else { return }
+
+                self.messages = Self.stableSortMessages(stored)
+
+                #if DEBUG
+                print("🧾 GEN_HISTORY Step4.4: loaded \(self.messages.count) messages for thread id=\(id)")
+                #endif
+
+                self.markNotificationsAsReadForThisThreadIfNeeded()
+                self.startEagerRecoveryIfNeeded()
+
+            } catch is CancellationError {
+            } catch {
+                #if DEBUG
+                print("🧾 GEN_HISTORY Step4.4: load history failed: \(error)")
+                #endif
+            }
+        }
+    }
+
+    // MARK: - Stable sort (critical for correct chat order)
+
+    private static func stableSortMessages(_ items: [GenerationMessage]) -> [GenerationMessage] {
+        items.sorted { lhs, rhs in
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt < rhs.createdAt
+            }
+
+            let lp = rolePriority(lhs.role)
+            let rp = rolePriority(rhs.role)
+            if lp != rp { return lp < rp }
+
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+    }
+
+    private static func rolePriority(_ role: GenerationMessageRole) -> Int {
+        switch role {
+        case .system: return 0
+        case .user: return 1
+        case .assistant: return 2
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: TextToImageChatViewModel/TextToImageChatViewModel+HistoryPersist.swift
+////////////////////////////////////////////////////////////
+
+
+import Foundation
+
+extension TextToImageChatViewModel {
+
+    func persistUserPromptToHistory(_ prompt: String, createdAt: Date) {
+        let repo = historyRepo
+        let id = threadId
+
+        let clean = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+
+        let preview = Self.makePreviewText(clean)
+
+        Task {
+            do {
+                await self.ensureThreadRegisteredAsync()
+
+                let msg = GenerationMessage(
+                    role: .user,
+                    createdAt: createdAt,
+                    payload: .text(clean)
+                )
+
+                try await repo.appendMessage(threadId: id, message: msg)
+                try await self.touchThread(preview: preview, at: createdAt)
+
+                #if DEBUG
+                print("🧾 GEN_HISTORY Step4.2: saved user prompt + updated thread preview id=\(id)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("🧾 GEN_HISTORY Step4.2: persist user prompt failed: \(error)")
+                #endif
+            }
+        }
+    }
+
+    func persistAssistantTextToHistory(_ text: String) {
+        persistAssistantPayloadToHistory(payload: .text(text), previewSeed: text)
+    }
+
+    func persistAssistantErrorToHistory(_ text: String) {
+        persistAssistantPayloadToHistory(payload: .error(text), previewSeed: text)
+    }
+
+    func persistAssistantPayloadToHistory(payload: GenerationPayload, previewSeed: String) {
+        let repo = historyRepo
+        let id = threadId
+        let now = Date()
+
+        let preview = Self.makePreviewText(previewSeed)
+
+        Task {
+            do {
+                await self.ensureThreadRegisteredAsync()
+
+                let msg = GenerationMessage(
+                    role: .assistant,
+                    createdAt: now,
+                    payload: payload
+                )
+                try await repo.appendMessage(threadId: id, message: msg)
+                try await self.touchThread(preview: preview, at: now)
+
+                #if DEBUG
+                print("🧾 GEN_HISTORY Step4.3: saved assistant message + updated thread preview id=\(id)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("🧾 GEN_HISTORY Step4.3: persist assistant message failed: \(error)")
+                #endif
+            }
+        }
+    }
+
+    static func makePreviewText(_ text: String, limit: Int = 80) -> String {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard clean.count > limit else { return clean }
+        let idx = clean.index(clean.startIndex, offsetBy: limit)
+        return String(clean[..<idx]) + "…"
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: TextToImageChatViewModel/TextToImageChatViewModel+Media.swift
+////////////////////////////////////////////////////////////
+
+import Foundation
+
+extension TextToImageChatViewModel {
+
+    // MARK: - Media helpers (TextToImage)
+
+    func persistAssistantMediaPlaceholderToHistory(message: GenerationMessage, preview: String) {
+        let repo = historyRepo
+        let id = threadId
+        let now = message.createdAt
+
+        Task {
+            do {
+                await self.ensureThreadRegisteredAsync()
+                try await repo.appendMessage(threadId: id, message: message)
+                try await self.touchThread(preview: preview, at: now)
+
+                #if DEBUG
+                print("🧾 GEN_MEDIA(TextToImage): saved placeholder msgId=\(message.id)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("🧾 GEN_MEDIA(TextToImage): persist placeholder failed: \(error)")
+                #endif
+            }
+        }
+    }
+
+    @MainActor
+    func updateImagePlaceholderRemote(messageId: UUID, remoteURL: URL) async {
+        let id = threadId
+        let repo = historyRepo
+
+        guard let current = messages.first(where: { $0.id == messageId }) else { return }
+
+        let updated = GenerationMessage(
+            id: current.id,
+            role: current.role,
+            createdAt: current.createdAt,
+            payload: .image(remoteURL: remoteURL, localURL: nil)
+        )
+
+        replaceGenerationMessageInUI(updated: updated)
+
+        do {
+            try await repo.replaceMessage(threadId: id, messageId: messageId, newMessage: updated)
+            #if DEBUG
+            print("🧾 GEN_MEDIA(TextToImage): updated placeholder remote msgId=\(messageId) remote=\(remoteURL.absoluteString)")
+            #endif
+        } catch {
+            #if DEBUG
+            print("🧾 GEN_MEDIA(TextToImage): update placeholder remote failed msgId=\(messageId) error=\(error)")
+            #endif
+        }
+    }
+
+    @MainActor
+    func downloadAndFinalizeImage(messageId: UUID, remoteURL: URL) async {
+        let repo = historyRepo
+        let id = threadId
+
+        guard self.activeGenerationMessageId == messageId else { return }
+        guard let current = messages.first(where: { $0.id == messageId }) else { return }
+
+        do {
+            let localURL = try await mediaCache.fetch(
+                remoteURL: remoteURL,
+                threadId: id,
+                kind: "image"
+            )
+            try Task.checkCancellation()
+
+            guard self.activeGenerationMessageId == messageId else {
+                #if DEBUG
+                print("🧾 GEN_MEDIA(TextToImage): ignored late download msgId=\(messageId)")
+                #endif
+                return
+            }
+
+            let finalized = GenerationMessage(
+                id: current.id,
+                role: current.role,
+                createdAt: current.createdAt,
+                payload: .image(remoteURL: remoteURL, localURL: localURL)
+            )
+
+            try await repo.replaceMessage(threadId: id, messageId: messageId, newMessage: finalized)
+            replaceGenerationMessageInUI(updated: finalized)
+
+            try await touchThread(
+                preview: "text_to_image.thread_preview.image_ready".localizable,
+                at: Date()
+            )
+
+            let didCreate = await internalNotifications.postGenerationReady(
+                generationKind: .textToImage,
+                threadId: id,
+                generationId: messageId,
+                title: "text_to_image.notification.title".localizable,
+                createdAt: Date()
+            )
+
+            #if DEBUG
+            print("🔔 GEN(TextToImage): post ready didCreate=\(didCreate) threadId=\(id) generationId=\(messageId)")
+            print("🧾 GEN_MEDIA(TextToImage): finalized msgId=\(messageId) local=\(localURL.path)")
+            #endif
+
+        } catch is CancellationError {
+            let cancelled = GenerationMessage(
+                id: messageId,
+                role: .system,
+                createdAt: Date(),
+                payload: .system("text_to_image.cancelled".localizable)
+            )
+            replaceGenerationMessageInUI(updated: cancelled)
+            try? await repo.replaceMessage(threadId: id, messageId: messageId, newMessage: cancelled)
+
+            #if DEBUG
+            print("🧾 GEN_MEDIA(TextToImage): cancelled msgId=\(messageId)")
+            #endif
+
+        } catch {
+            let pretty = String(describing: error)
+
+            let failedText = String(
+                format: "text_to_image.download_failed".localizable,
+                remoteURL.absoluteString,
+                pretty
+            )
+
+            let failed = GenerationMessage(
+                id: messageId,
+                role: .assistant,
+                createdAt: Date(),
+                payload: .error(failedText)
+            )
+            replaceGenerationMessageInUI(updated: failed)
+            try? await repo.replaceMessage(threadId: id, messageId: messageId, newMessage: failed)
+
+            #if DEBUG
+            print("🧾 GEN_MEDIA(TextToImage): failed msgId=\(messageId) error=\(pretty)")
+            #endif
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: TextToImageChatViewModel/TextToImageChatViewModel+Thread.swift
+////////////////////////////////////////////////////////////
+
+
+
+import Foundation
+
+extension TextToImageChatViewModel {
+
+    // MARK: - Thread helpers
+
+    func ensureThreadRegistered() {
+        Task { [weak self] in
+            await self?.ensureThreadRegisteredAsync()
+        }
+    }
+
+    func ensureThreadRegisteredAsync() async {
+        let repo = historyRepo
+        let id = threadId
+
+        do {
+            let threads = try await repo.fetchThreads()
+            if threads.contains(where: { $0.id == id }) { return }
+
+            try await repo.upsert(GenerationThread(id: id, kind: kind))
+
+            #if DEBUG
+            print("🧾 GEN_HISTORY thread created: id=\(id) kind=\(kind.rawValue)")
+            #endif
+        } catch {
+            #if DEBUG
+            print("🧾 GEN_HISTORY thread create failed: \(error)")
+            #endif
+        }
+    }
+
+    func touchThread(preview: String?, at date: Date) async throws {
+        let repo = historyRepo
+        let id = threadId
+
+        var threads = try await repo.fetchThreads()
+        if let idx = threads.firstIndex(where: { $0.id == id }) {
+            var t = threads[idx]
+            t.touch(preview: preview, at: date)
+            try await repo.upsert(t)
+        } else {
+            var t = GenerationThread(id: id, kind: kind)
+            t.touch(preview: preview, at: date)
+            try await repo.upsert(t)
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: TextToImageChatViewModel/TextToImageChatViewModel+UIHelpers.swift
+////////////////////////////////////////////////////////////
+
+
+
+import Foundation
+
+extension TextToImageChatViewModel {
+
+    // MARK: - UI helpers
+
+    func replaceGenerationMessageInUI(updated: GenerationMessage) {
+        if let idx = messages.firstIndex(where: { $0.id == updated.id }) {
+            messages[idx] = updated
+        } else {
+            messages.append(updated)
+        }
+    }
+
+    func fileExists(_ url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
+    }
+}
+
+

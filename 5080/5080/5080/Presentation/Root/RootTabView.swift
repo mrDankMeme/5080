@@ -131,14 +131,18 @@ private struct RootTabContentView: View {
             }
         }
         .background(Tokens.Color.surfaceWhite.ignoresSafeArea())
-        .overlay {
-            if viewModel.isTokensPaywallPresented {
-                TokensPaywallView {
+        .fullScreenCover(isPresented: Binding(
+            get: { viewModel.isTokensPaywallPresented },
+            set: { isPresented in
+                if !isPresented {
                     viewModel.dismissTokensPaywall()
                 }
-                .environmentObject(purchaseManager)
-                .zIndex(40)
             }
+        )) {
+            TokensPaywallView {
+                viewModel.dismissTokensPaywall()
+            }
+            .environmentObject(purchaseManager)
         }
         .fullScreenCover(isPresented: Binding(
             get: { viewModel.isTextToVideoFlowPresented },

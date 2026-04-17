@@ -1,0 +1,688 @@
+////////////////////////////////////////////////////////////
+// FILE: GenerationAttachmentTiles.swift
+////////////////////////////////////////////////////////////
+
+
+
+import SwiftUI
+import UIKit
+
+// MARK: - Tiles
+
+struct GenerationAttachmentPreviewTile: View {
+    let image: UIImage
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+
+            RoundedRectangle(cornerRadius: 16.scale, style: .continuous)
+                .fill(Color.black.opacity(0.06))
+                .frame(width: 100.scale, height: 100.scale)
+
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 80.scale, height: 80.scale)
+                .clipShape(RoundedRectangle(cornerRadius: 8.scale, style: .continuous))
+                .padding(10.scale)
+
+            Image("ic_attachment_image_20")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 20.scale, height: 20.scale)
+                .padding(.leading, 14.scale)
+                .padding(.bottom, 14.scale)
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+struct GenerationAttachmentPlaceholderTile: View {
+    let accentColor: Color
+    let onTap: () -> Void
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16.scale, style: .continuous)
+                .fill(Color.black.opacity(0.06))
+                .frame(width: 100.scale, height: 100.scale)
+
+            RoundedRectangle(cornerRadius: 16.scale, style: .continuous)
+                .fill(Color.white.opacity(0.9))
+                .frame(width: 80.scale, height: 80.scale)
+
+            Image(systemName: "photo")
+                .font(.system(size: 22.scale, weight: .semibold))
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(.black)
+        }
+        .opacity(0.5)                 
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: GenerationChatCircleIconButton.swift
+////////////////////////////////////////////////////////////
+
+
+
+
+import SwiftUI
+
+struct GenerationChatCircleIconButton: View {
+    let systemName: String?
+    let imageName: String?
+    let size: CGFloat
+    let fill: Color
+    let tint: Color
+    let isDisabled: Bool
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    init(
+        systemName: String,
+        size: CGFloat,
+        fill: Color,
+        tint: Color,
+        isDisabled: Bool,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) {
+        self.systemName = systemName
+        self.imageName = nil
+        self.size = size
+        self.fill = fill
+        self.tint = tint
+        self.isDisabled = isDisabled
+        self.accessibilityLabel = accessibilityLabel
+        self.action = action
+    }
+
+    init(
+        imageName: String,
+        size: CGFloat,
+        fill: Color,
+        tint: Color,
+        isDisabled: Bool,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) {
+        self.systemName = nil
+        self.imageName = imageName
+        self.size = size
+        self.fill = fill
+        self.tint = tint
+        self.isDisabled = isDisabled
+        self.accessibilityLabel = accessibilityLabel
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if let imageName {
+                    Image(imageName)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: size, height: size)
+
+                } else if let systemName {
+                    ZStack {
+                        Circle()
+                            .fill(Tokens.Color.accentGradient)
+                            .opacity(isDisabled ? 0.6 : 1.0)
+
+                        Image(systemName: systemName)
+                            .font(Tokens.Font.semibold15)
+                            .foregroundStyle(tint)
+                    }
+                    .frame(width: size, height: size)
+                }
+            }
+            .opacity(isDisabled ? 0.6 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: GenerationChatComposerView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+import UIKit
+import Swinject
+
+struct GenerationChatComposerView: View {
+
+    enum RightActionIcon {
+        case mic
+        case send
+        case stop
+    }
+
+    @Environment(\.resolver) private var resolver
+
+    let showsPlus: Bool
+    let isLoading: Bool
+
+    @Binding var text: String
+
+    let attachmentImage: UIImage?
+
+    let secondAttachmentImage: UIImage?
+    let showsSecondAttachmentSlot: Bool
+
+    let placeholderText: String
+
+    let isTextInputEnabled: Bool
+
+    let forceSendIcon: Bool
+
+    let isMicEnabled: Bool
+
+    let showsVideoSettingsButton: Bool
+    let onVideoSettingsTap: () -> Void
+
+    let onPickPhotoTap: () -> Void
+
+    let onSecondPickPhotoTap: (() -> Void)?
+
+    let onMicTap: () -> Void
+
+    let onSendTap: () -> Void
+
+    let isSendEnabled: Bool
+
+
+    @State var isRecording: Bool = false
+    @State var speechErrorText: String?
+    @State var activeSpeechSessionId: UUID = UUID()
+
+    @State var recordSeconds: Int = 0
+    @State var recordTimer: Timer?
+
+    @FocusState internal var isTextFieldFocused: Bool
+
+    var speechService: SpeechToTextService? {
+        resolver.resolve(SpeechToTextService.self)
+    }
+
+    // MARK: - Layout constants (по твоим цифрам)
+
+    let barHeight: CGFloat = 64.scale
+    let barCornerRadius: CGFloat = 24.scale
+
+    let plusSize = CGSize(width: 18.scale, height: 20.scale)
+    let circleButtonSize: CGFloat = 35.scale
+
+    let leftInset: CGFloat = 16.scale
+    let rightInset: CGFloat = 16.scale
+    let spaceBetweenRightButtons: CGFloat = 14.scale
+
+    let borderColor = Color(hex: "#50545B")!
+    let placeholderColor = Tokens.Color.textPrimary
+    let inputTextColor = Tokens.Color.textPrimary
+
+    init(
+        showsPlus: Bool,
+        isLoading: Bool,
+        text: Binding<String>,
+        attachmentImage: UIImage?,
+        onPickPhotoTap: @escaping () -> Void,
+        onMicTap: @escaping () -> Void,
+        onSendTap: @escaping () -> Void,
+        isSendEnabled: Bool = true,
+        secondAttachmentImage: UIImage? = nil,
+        showsSecondAttachmentSlot: Bool = false,
+        onSecondPickPhotoTap: (() -> Void)? = nil,
+        placeholderText: String = "composer.placeholder.default",
+        isTextInputEnabled: Bool = true,
+        forceSendIcon: Bool = false,
+        isMicEnabled: Bool = true,
+        showsVideoSettingsButton: Bool = false,
+        onVideoSettingsTap: @escaping () -> Void = {}
+    ) {
+        self.showsPlus = showsPlus
+        self.isLoading = isLoading
+        self._text = text
+        self.attachmentImage = attachmentImage
+
+        self.onPickPhotoTap = onPickPhotoTap
+        self.onSecondPickPhotoTap = onSecondPickPhotoTap
+        self.onMicTap = onMicTap
+        self.onSendTap = onSendTap
+
+        self.isSendEnabled = isSendEnabled
+
+        self.secondAttachmentImage = secondAttachmentImage
+        self.showsSecondAttachmentSlot = showsSecondAttachmentSlot
+
+        self.placeholderText = placeholderText.localizable
+        self.isTextInputEnabled = isTextInputEnabled
+        self.forceSendIcon = forceSendIcon
+        self.isMicEnabled = isMicEnabled
+
+        self.showsVideoSettingsButton = showsVideoSettingsButton
+        self.onVideoSettingsTap = onVideoSettingsTap
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10.scale) {
+
+            bubbleContainer
+
+            if let speechErrorText, !speechErrorText.isEmpty {
+                Text(speechErrorText)
+                    .foregroundStyle(.red)
+                    .font(.footnote)
+                    .padding(.leading, 14.scale)
+                    .padding(.bottom, 10.scale)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .onDisappear {
+            if isRecording {
+                cancelDictation()
+            }
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: GenerationChatComposerView+Computed.swift
+////////////////////////////////////////////////////////////
+
+
+
+import Foundation
+
+extension GenerationChatComposerView {
+
+    var isTextEmpty: Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var shouldShowPlaceholder: Bool {
+        isTextEmpty && !isTextFieldFocused
+    }
+
+    var rightIcon: RightActionIcon {
+        if isRecording { return .stop }
+        if forceSendIcon { return .send }
+        guard isMicEnabled else { return .send }
+        return isTextEmpty ? .mic : .send
+    }
+
+    var shouldShowAttachmentsRow: Bool {
+        if showsSecondAttachmentSlot {
+            return attachmentImage != nil || secondAttachmentImage != nil
+        } else {
+            return attachmentImage != nil
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: GenerationChatComposerView+Speech.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+import Foundation
+
+extension GenerationChatComposerView {
+
+    // MARK: - Speech handlers
+
+    func handleMicToggle() {
+        if isRecording {
+            stopDictation()
+            return
+        }
+
+        guard isMicEnabled else { return }
+
+        guard isTextInputEnabled else {
+            speechErrorText = "composer.speech.unavailable_in_mode".localizable
+            return
+        }
+
+        guard let speechService else {
+            speechErrorText = "composer.speech.service_not_found".localizable
+            onMicTap()
+            return
+        }
+
+        speechErrorText = nil
+
+        Task { @MainActor in
+            let status = await speechService.requestPermissions()
+
+            guard status == .authorized else {
+                switch status {
+                case .denied:
+                    speechErrorText = "composer.speech.permission_denied".localizable
+                case .restricted:
+                    speechErrorText = "composer.speech.permission_restricted".localizable
+                case .notDetermined:
+                    speechErrorText = "composer.speech.permission_not_determined".localizable
+                default:
+                    speechErrorText = "composer.speech.permission_unavailable".localizable
+                }
+                onMicTap()
+                return
+            }
+
+            let sessionId = UUID()
+            activeSpeechSessionId = sessionId
+
+            isRecording = true
+            startRecordTimer()
+
+            speechService.start(
+                onPartial: { partial in
+                    Task { @MainActor in
+                        guard activeSpeechSessionId == sessionId else { return }
+                        self.text = partial
+                    }
+                },
+                onFinal: { finalText in
+                    Task { @MainActor in
+                        guard activeSpeechSessionId == sessionId else { return }
+                        self.text = finalText
+                        self.isRecording = false
+                        stopRecordTimer(reset: false)
+                    }
+                },
+                onError: { err in
+                    Task { @MainActor in
+                        guard activeSpeechSessionId == sessionId else { return }
+                        self.speechErrorText = String(
+                            format: "composer.speech.error_format".localizable,
+                            err.localizedDescription
+                        )
+                        self.isRecording = false
+                        stopRecordTimer(reset: true)
+                    }
+                }
+            )
+
+            self.isRecording = speechService.isRunning
+            if !self.isRecording {
+                stopRecordTimer(reset: true)
+            }
+        }
+    }
+
+    func stopDictation() {
+        activeSpeechSessionId = UUID()
+        isRecording = false
+        speechService?.stop()
+        stopRecordTimer(reset: false)
+    }
+
+    func cancelDictation() {
+        activeSpeechSessionId = UUID()
+        isRecording = false
+        speechService?.cancel()
+        stopRecordTimer(reset: true)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: GenerationChatComposerView+Subviews.swift
+////////////////////////////////////////////////////////////
+
+
+
+import SwiftUI
+import UIKit
+
+extension GenerationChatComposerView {
+
+    var attachmentsRow: some View {
+        HStack(spacing: 8.scale) {
+
+            if let attachmentImage {
+                GenerationAttachmentPreviewTile(image: attachmentImage)
+            } else if showsSecondAttachmentSlot {
+                GenerationAttachmentPlaceholderTile(
+                    accentColor: Tokens.Color.accent,
+                    onTap: {
+                        guard !isLoading else { return }
+                        onPickPhotoTap()
+                    }
+                )
+            }
+
+            if showsSecondAttachmentSlot {
+                Image("connect")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 44.scale, height: 44.scale)
+                    .accessibilityHidden(true)
+            }
+
+            if showsSecondAttachmentSlot {
+                if let secondAttachmentImage {
+                    GenerationAttachmentPreviewTile(image: secondAttachmentImage)
+                        .onTapGesture {
+                            guard !isLoading else { return }
+                            onSecondPickPhotoTap?()
+                        }
+                } else {
+                    GenerationAttachmentPlaceholderTile(
+                        accentColor: Tokens.Color.accent,
+                        onTap: {
+                            guard !isLoading else { return }
+                            onSecondPickPhotoTap?()
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    func iconName(for icon: RightActionIcon) -> String {
+        switch icon {
+        case .mic:  return "mic.fill"
+        case .send: return "paperplane.fill"
+        case .stop: return "stop.fill"
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: GenerationChatComposerView+Timer.swift
+////////////////////////////////////////////////////////////
+
+
+
+import SwiftUI
+import Foundation
+
+extension GenerationChatComposerView {
+
+    var timerText: String {
+        let mm = recordSeconds / 60
+        let ss = recordSeconds % 60
+        let mmStr = mm < 10 ? "0\(mm)" : "\(mm)"
+        let ssStr = ss < 10 ? "0\(ss)" : "\(ss)"
+        return "\(mmStr):\(ssStr)"
+    }
+
+    func startRecordTimer() {
+        stopRecordTimer(reset: true)
+        recordSeconds = 0
+        recordTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            recordSeconds += 1
+        }
+        if let recordTimer {
+            RunLoop.main.add(recordTimer, forMode: .common)
+        }
+    }
+
+    func stopRecordTimer(reset: Bool) {
+        recordTimer?.invalidate()
+        recordTimer = nil
+        if reset {
+            recordSeconds = 0
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: GenerationChatComposerView+UI.swift
+////////////////////////////////////////////////////////////
+
+
+
+import SwiftUI
+
+extension GenerationChatComposerView {
+
+    var bubbleContainer: some View {
+        VStack(alignment: .leading, spacing: 0) {
+
+            if shouldShowAttachmentsRow {
+                attachmentsRow
+                    .padding(.leading, 10.scale)
+                    .padding(.top, 10.scale)
+                    .padding(.bottom, 10.scale)
+            }
+
+            inputBarContent
+        }
+        .background(
+            RoundedRectangle(cornerRadius: barCornerRadius, style: .continuous)
+                .fill(Color(hex:"#202020")!)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: barCornerRadius, style: .continuous)
+                .stroke(borderColor, lineWidth: 1)
+        )
+        .apply(Tokens.Shadow.card)
+    }
+
+    var inputBarContent: some View {
+        HStack(spacing: 0) {
+
+            HStack(spacing: 0) {
+                if showsPlus {
+                    Button {
+                        guard !isLoading else { return }
+                        onPickPhotoTap()
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 18.scale, weight: .semibold))
+                            .foregroundStyle(placeholderColor)
+                            .frame(width: plusSize.width, height: plusSize.height)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer().frame(width: 16.scale)
+                }
+            }
+            .frame(height: barHeight, alignment: .center)
+            .padding(.leading, leftInset)
+
+            ZStack(alignment: .leading) {
+                if shouldShowPlaceholder {
+                    Text(placeholderText)
+                        .foregroundStyle(placeholderColor)
+                        .font(Tokens.Font.regular17)
+                }
+
+                TextField("", text: $text, axis: .vertical)
+                    .font(Tokens.Font.regular17)
+                    .foregroundStyle(inputTextColor)
+                    .lineLimit(1...4)
+                    .disabled(isLoading || !isTextInputEnabled)
+                    .submitLabel(.send)
+                    .focused($isTextFieldFocused)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(minHeight: barHeight, alignment: .center)
+
+            HStack(spacing: spaceBetweenRightButtons) {
+
+                if isRecording {
+                    Text(timerText)
+                        .font(Tokens.Font.semibold11)
+                        .monospacedDigit()
+                        .foregroundStyle(Tokens.Color.textSecondary)
+                        .padding(.horizontal, 6.scale)
+                        .padding(.vertical, 4.scale)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color.black.opacity(0.06))
+                        )
+                }
+
+                if showsVideoSettingsButton {
+                }
+
+                if rightIcon == .mic {
+                    GenerationChatCircleIconButton(
+                        imageName: "mic",
+                        size: circleButtonSize,
+                        fill: Tokens.Color.accent,
+                        tint: .white,
+                        isDisabled: isLoading,
+                        accessibilityLabel: "Микрофон"
+                    ) {
+                        guard !isLoading else { return }
+                        handleMicToggle()
+                    }
+                } else {
+                    GenerationChatCircleIconButton(
+                        systemName: iconName(for: rightIcon),
+                        size: circleButtonSize,
+                        fill: Tokens.Color.accent,
+                        tint: .white,
+                        isDisabled: isLoading || (rightIcon == .send && !isSendEnabled),
+                        accessibilityLabel: (rightIcon == .send ? "Отправить" : "Остановить")
+                    ) {
+                        guard !isLoading else { return }
+
+                        switch rightIcon {
+                        case .mic:
+                            handleMicToggle()
+                        case .stop:
+                            stopDictation()
+                        case .send:
+                            guard isSendEnabled else { return }
+                            if isRecording { stopDictation() }
+                            isTextFieldFocused = false
+                            onSendTap()
+                        }
+                    }
+                }
+            }
+            .frame(height: barHeight, alignment: .center)
+            .padding(.trailing, rightInset)
+        }
+        .frame(height: barHeight, alignment: .center)
+        .animation(.easeOut(duration: 0.12), value: isTextEmpty)
+        .animation(.easeOut(duration: 0.12), value: isRecording)
+        .onChange(of: isLoading) { _, newValue in
+            if newValue {
+                isTextFieldFocused = false
+            }
+        }
+    }
+}
+
+

@@ -1,0 +1,2144 @@
+////////////////////////////////////////////////////////////
+// FILE: PhotoToVideoChatView.swift
+////////////////////////////////////////////////////////////
+
+import SwiftUI
+import PhotosUI
+
+struct PhotoToVideoChatView: View {
+
+    @EnvironmentObject private var purchaseManager: PurchaseManager
+    @StateObject private var vm: PhotoToVideoChatViewModel
+
+    @State private var pickedItem: PhotosPickerItem?
+    @State private var pickedPreview: UIImage?
+    @State private var isPickerPresented: Bool = false
+
+    // MARK: - RateUs -> Support Email (present AFTER RateUs dismiss)
+    @State private var isShowingRateUs: Bool = false
+    @State private var shouldOpenRateUsEmailAfterDismiss: Bool = false
+    @State private var isRateUsSupportMailPresented: Bool = false
+    @State private var rateUsSupportMailPayload: MailComposerPayload? = nil
+
+    private let imageCache: ImageCache
+
+    init(vm: PhotoToVideoChatViewModel, imageCache: ImageCache) {
+        _vm = StateObject(wrappedValue: vm)
+        self.imageCache = imageCache
+    }
+
+    var body: some View {
+        GenerationChatContainerView(
+            title: "photo_to_video.title".localizable,
+            modeTitle: "photo_to_video.mode_title".localizable,
+            messages: vm.messages,
+            isLoading: vm.isLoading,
+            errorText: vm.errorText,
+            threadId: vm.threadId,
+            historyRepo: vm.historyRepoForViewer,
+            mediaCache: vm.mediaCacheForViewer,
+            onMessageUpdated: { updated in
+                vm.applyMessageUpdateFromViewer(updated)
+            }
+        ) {
+            content
+        }
+        .onChange(of: vm.shouldShowPaywall) { should in
+            guard should else { return }
+            purchaseManager.isShowedPaywall = true
+            vm.consumePaywallSignal()
+
+            #if DEBUG
+            print("💎 GEN(PhotoToVideo): show paywall from gate (kind=\(purchaseManager.currentSubKind))")
+            #endif
+        }
+        .onChange(of: vm.shouldShowRateUs) { should in
+            guard should else { return }
+            hideKeyboard()
+            RateAskScheduler.shared.markAskShown()
+            vm.consumeRateUsSignal()
+            isShowingRateUs = true
+
+            #if DEBUG
+            print("⭐️ RateUs: presenting from PhotoToVideo success")
+            #endif
+        }
+        .fullScreenCover(isPresented: $isShowingRateUs) {
+            RateUsView { action in
+                hideKeyboard()
+
+                switch action {
+                case .liked:
+                    RateAskScheduler.shared.markRated()
+                    isShowingRateUs = false
+
+                case .laterOpenEmail:
+                    shouldOpenRateUsEmailAfterDismiss = true
+                    isShowingRateUs = false
+
+                case .laterJustClose:
+                    isShowingRateUs = false
+                }
+            }
+            .environment(\.dynamicTypeSize, .medium)
+            .ignoresSafeArea()
+        }
+        .onChange(of: isShowingRateUs) { _, newValue in
+            guard newValue == false, shouldOpenRateUsEmailAfterDismiss else { return }
+            shouldOpenRateUsEmailAfterDismiss = false
+            prepareAndPresentRateUsEmail()
+        }
+        .sheet(isPresented: $isRateUsSupportMailPresented) {
+            if let payload = rateUsSupportMailPayload {
+                MailComposerView(payload: payload)
+            } else {
+                VStack(spacing: 12) {
+                    Text("rateus.support.mail_prepare_failed".localizable)
+                    Button("common.ok".localizable) {
+                        isRateUsSupportMailPresented = false
+                    }
+                }
+                .padding()
+            }
+        }
+        .alert(item: $vm.limitAlert) { item in
+            Alert(
+                title: Text(item.title),
+                message: Text(item.message),
+                dismissButton: .default(Text(item.buttonTitle))
+            )
+        }
+    }
+
+    private var content: some View {
+        VStack(spacing: 10) {
+            templatesCarousel
+            composerBlock
+        }
+        .photosPicker(isPresented: $isPickerPresented, selection: $pickedItem, matching: .images)
+        .onChange(of: pickedItem) { _ in
+            Task { @MainActor in
+                await loadPreviewIfNeeded()
+            }
+        }
+        .task {
+            vm.ensureTemplatesLoadedOnAppear(lang: "en")
+        }
+    }
+
+    private var templatesCarousel: some View {
+        VStack(spacing: 10) {
+
+            if let text = vm.templatesErrorText, !text.isEmpty {
+                Text(String(format: "photo_to_video.templates_error".localizable, text))
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if vm.isTemplatesLoading && vm.templates.isEmpty {
+                HStack {
+                    ProgressView()
+                    Text("photo_to_video.loading_templates".localizable)
+                        .font(.footnote)
+                        .foregroundStyle(Tokens.Color.textSecondary)
+                    Spacer(minLength: 0)
+                }
+            }
+
+            if !vm.templates.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 12.scale) {
+                        ForEach(vm.templates, id: \.id) { v in
+                            TemplateCard(
+                                template: v,
+                                isSelected: vm.selectedTemplateId == v.id,
+                                cache: imageCache,
+                                localVideoURL: vm.cachedPreviewLocalURLByTemplateId[v.id],
+                                onTap: {
+                                    vm.selectTemplate(id: v.id)
+                                }
+                            )
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .frame(maxHeight: 140.scale)
+            }
+
+            #if DEBUG
+            if vm.templates.isEmpty && !vm.isTemplatesLoading {
+                HStack {
+                    Spacer(minLength: 0)
+                    Button("photo_to_video.reload_templates".localizable) {
+                        vm.loadVideoTemplates(lang: "en")
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            #endif
+        }
+    }
+
+    private struct TemplateCard: View {
+        let template: VideoTemplateDTO
+        let isSelected: Bool
+        let cache: ImageCache
+        let localVideoURL: URL?
+        let onTap: () -> Void
+
+        @State private var isShowingVideo: Bool = false
+        @State private var playToken: UUID = UUID()
+
+        var body: some View {
+            Button {
+                onTap()
+
+                playToken = UUID()
+                isShowingVideo = true
+            } label: {
+                VStack(alignment: .leading, spacing: 6) {
+                    ZStack(alignment: .topTrailing) {
+                        preview
+
+                        if template.isNew {
+                            Text("photo_to_video.badge_new".localizable)
+                                .font(.caption2)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(Tokens.Color.componentsBackground.opacity(0.9))
+                                .clipShape(Capsule())
+                                .padding(6)
+                        }
+                    }
+
+                    Text(titleText)
+                        .font(.caption)
+                        .foregroundStyle(Tokens.Color.textPrimary)
+                        .lineLimit(2)
+                        .frame(width: 100.scale, alignment: .leading)
+                }
+                .padding(6)
+                .background(
+                    RoundedRectangle(cornerRadius: 16.scale, style: .continuous)
+                        .fill(Tokens.Color.componentsBackground)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16.scale, style: .continuous)
+                        .stroke(isSelected ? Tokens.Color.accent : .clear, lineWidth: isSelected ? 2 : 0)
+                )
+            }
+            .buttonStyle(.plain)
+            .onChange(of: isSelected) { newValue in
+                if newValue {
+                    playToken = UUID()
+                    isShowingVideo = true
+                } else {
+                    isShowingVideo = false
+                }
+            }
+        }
+
+        private var preview: some View {
+            ZStack {
+                if isSelected, isShowingVideo, let videoURL = resolvedVideoURL {
+                    InlineAutoplayVideoPreview(
+                        url: videoURL,
+                        playToken: playToken,
+                        onFinished: {
+                            isShowingVideo = false
+                        }
+                    )
+                } else {
+                    CachedAsyncImage(url: photoPreviewURL, cache: cache)
+                }
+            }
+            .frame(width: 100.scale, height: 100.scale)
+            .clipShape(RoundedRectangle(cornerRadius: 16.scale, style: .continuous))
+        }
+
+        private var photoPreviewURL: URL? {
+            let s = template.photoPreview.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !s.isEmpty else { return nil }
+            return URL(string: s)
+        }
+
+        private var resolvedVideoURL: URL? {
+            if let localVideoURL {
+                return localVideoURL
+            }
+
+            let short = (template.videoPreviewShort ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !short.isEmpty, let u = URL(string: short) {
+                return u
+            }
+
+            let full = template.videoPreview.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !full.isEmpty, let u = URL(string: full) {
+                return u
+            }
+
+            return nil
+        }
+
+        private var titleText: String {
+            let clean = (template.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if clean.isEmpty {
+                return String(format: "photo_to_video.template_fallback".localizable, "\(template.id)")
+            }
+            return clean
+        }
+    }
+
+    // MARK: - Composer
+
+    private var composerBlock: some View {
+        let hasTemplate: Bool = vm.selectedTemplateId != nil
+        let canSend: Bool = (pickedItem != nil) && hasTemplate
+
+        return GenerationChatComposerView(
+            showsPlus: true,
+            isLoading: vm.isLoading,
+            text: $vm.templateIdText,
+            attachmentImage: pickedPreview,
+            onPickPhotoTap: {
+                guard !vm.isLoading else { return }
+                isPickerPresented = true
+            },
+            onMicTap: { },
+            onSendTap: { onGeneratePressed() },
+            isSendEnabled: canSend,
+            secondAttachmentImage: nil,
+            showsSecondAttachmentSlot: false,
+            onSecondPickPhotoTap: nil,
+            placeholderText: "photo_to_video.composer.placeholder",
+            isTextInputEnabled: false,
+            forceSendIcon: true,
+            isMicEnabled: false
+        )
+    }
+
+    // MARK: - Actions
+
+    private func onGeneratePressed() {
+        guard let pickedItem else {
+            vm.showUserError("photo_to_video.error.pick_photo".localizable)
+            return
+        }
+
+        Task { @MainActor in
+            do {
+                guard let data = try await pickedItem.loadTransferable(type: Data.self) else {
+                    vm.showUserError("photo_to_video.error.read_photo_nil".localizable)
+                    return
+                }
+
+                vm.onGenerateTap(photoData: data)
+
+                self.pickedItem = nil
+                self.pickedPreview = nil
+
+            } catch {
+                vm.showUserError(
+                    String(
+                        format: "photo_to_video.error.read_photo".localizable,
+                        String(describing: error)
+                    )
+                )
+            }
+        }
+    }
+
+    @MainActor
+    private func loadPreviewIfNeeded() async {
+        guard let pickedItem else {
+            pickedPreview = nil
+            return
+        }
+
+        do {
+            if let data = try await pickedItem.loadTransferable(type: Data.self),
+               let ui = UIImage(data: data) {
+                pickedPreview = ui
+            } else {
+                pickedPreview = nil
+            }
+        } catch {
+            pickedPreview = nil
+        }
+    }
+
+    // MARK: - RateUs Email
+
+    private func prepareAndPresentRateUsEmail() {
+        let diagnostics = AppDiagnostics.makeSupportDiagnosticsText()
+        let body = String(
+            format: "rateus.support.email_body_template".localizable,
+            diagnostics
+        )
+
+        rateUsSupportMailPayload = MailComposerPayload(
+            to: "dete8489@gmail.com",
+            subject: "rateus.support.email_subject".localizable,
+            body: body,
+            isHTML: false,
+            fallbackMailToURL: MailComposerPayload.makeMailToURL(
+                to: "dete8489@gmail.com",
+                subject: "rateus.support.email_subject".localizable,
+                body: body
+            )
+        )
+
+        isRateUsSupportMailPresented = true
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PhotoToVideoChatViewModel/PhotoToVideoChatViewModel.swift
+////////////////////////////////////////////////////////////
+
+import Foundation
+import UIKit
+
+@MainActor
+final class PhotoToVideoChatViewModel: ObservableObject {
+
+    // MARK: - Thread
+
+    let threadId: UUID
+    let kind: GenerationKind = .photoToVideo
+    let shouldLoadHistory: Bool
+
+    // MARK: - UI
+
+    @Published var messages: [GenerationMessage] = [
+        GenerationMessage(
+            role: .system,
+            createdAt: Date(),
+            payload: .system("photo_to_video.system.pick_photo_and_template".localizable)
+        )
+    ]
+
+    @Published var templateIdText: String = ""
+
+    @Published var isLoading: Bool = false
+    @Published var errorText: String?
+    @Published var lastResultURL: URL?
+
+    @Published var templateGroups: [VideoTemplateGroupDTO] = []
+    @Published var isTemplatesLoading: Bool = false
+    @Published var templatesErrorText: String?
+
+    @Published var templates: [VideoTemplateDTO] = []
+    @Published var cachedPreviewLocalURLByTemplateId: [Int: URL] = [:]
+    @Published var selectedTemplateId: Int?
+
+    @Published var shouldShowPaywall: Bool = false
+    @Published var limitAlert: LimitAlertItem? = nil
+
+    @Published var shouldShowRateUs: Bool = false
+
+    // MARK: - Dependencies
+
+    let useCase: GenerateVideoFromPhotoUseCase
+    let templatesService: GenerationService
+    let historyRepo: GenerationHistoryRepository
+    let mediaCache: MediaCacheService
+    let templateVideoCache: TemplateVideoCacheService
+
+    let internalNotifications: InternalNotificationCenter
+    let requestCounter: RequestCounterService
+
+    let pendingService: PendingGenerationService
+    let updateCenter: GenerationThreadUpdateCenter
+
+    var historyRepoForViewer: GenerationHistoryRepository { historyRepo }
+    var mediaCacheForViewer: MediaCacheService { mediaCache }
+
+    func applyMessageUpdateFromViewer(_ updated: GenerationMessage) {
+        replaceGenerationMessageInUI(updated: updated)
+    }
+
+    // MARK: - Tasks
+
+    var task: Task<Void, Never>?
+    var templatesTask: Task<Void, Never>?
+    var historyTask: Task<Void, Never>?
+
+    var eagerRecoveryTask: Task<Void, Never>?
+    var eagerRecoveryInFlight: Set<UUID> = []
+
+    var activeGenerationMessageId: UUID?
+    var activeStatusMessageId: UUID?
+
+    var activeGenerationId: UUID?
+
+    let prewarmCount: Int = 10
+    let prewarmParallelism: Int = 3
+    var prewarmTask: Task<Void, Never>?
+
+    var onDemandTasks: [Int: Task<Void, Never>] = [:]
+
+    var updatesTask: Task<Void, Never>?
+    var lastReloadAt: Date = .distantPast
+
+    private var didFireRateUsSignal: Bool = false
+
+    // MARK: - Anti-spam (DEBUG)
+
+    let debugVideoLimit: Int = .max
+
+    // MARK: - Subscription snapshot provider (injected from factory)
+
+    typealias SubscriptionSnapshot = (isSubscribed: Bool, kind: SubscriptionKind)
+
+    private var subscriptionSnapshotProvider: (@Sendable () -> SubscriptionSnapshot)?
+
+    func setSubscriptionSnapshotProvider(_ provider: @escaping @Sendable () -> SubscriptionSnapshot) {
+        self.subscriptionSnapshotProvider = provider
+    }
+
+    func consumePaywallSignal() {
+        shouldShowPaywall = false
+    }
+
+    func consumeRateUsSignal() {
+        shouldShowRateUs = false
+    }
+
+    // MARK: - RateUs helper
+
+    func tryTriggerRateUsAfterSuccessfulResult() {
+        guard didFireRateUsSignal == false else { return }
+        guard RateAskScheduler.shared.shouldShowRateAsk() else { return }
+
+        didFireRateUsSignal = true
+        shouldShowRateUs = true
+    }
+
+    struct LimitAlertItem: Identifiable, Equatable {
+        let id: String = UUID().uuidString
+        let title: String
+        let message: String
+        let buttonTitle: String
+    }
+
+    func evaluateGate(snapshot: RequestCounterSnapshot) -> GenerationGateDecision {
+        let sub = subscriptionSnapshotProvider?() ?? (false, .unknown)
+        return GenerationLimitGate.evaluate(
+            isSubscribed: sub.isSubscribed,
+            kind: sub.kind,
+            snapshot: snapshot
+        )
+    }
+
+    // MARK: - Init
+
+    init(
+        threadId: UUID? = nil,
+        useCase: GenerateVideoFromPhotoUseCase,
+        templatesService: GenerationService,
+        historyRepo: GenerationHistoryRepository,
+        mediaCache: MediaCacheService,
+        templateVideoCache: TemplateVideoCacheService,
+        internalNotifications: InternalNotificationCenter,
+        requestCounter: RequestCounterService,
+        pendingService: PendingGenerationService,
+        updateCenter: GenerationThreadUpdateCenter
+    ) {
+        self.threadId = threadId ?? UUID()
+        self.shouldLoadHistory = (threadId != nil)
+
+        self.useCase = useCase
+        self.templatesService = templatesService
+        self.historyRepo = historyRepo
+        self.mediaCache = mediaCache
+        self.templateVideoCache = templateVideoCache
+        self.internalNotifications = internalNotifications
+        self.requestCounter = requestCounter
+        self.pendingService = pendingService
+        self.updateCenter = updateCenter
+
+        if shouldLoadHistory {
+            ensureThreadRegistered()
+            loadHistoryIfExists()
+            subscribeToThreadUpdates()
+        }
+
+        ensureTemplatesLoadedOnAppear()
+    }
+
+    deinit {
+        task?.cancel()
+        templatesTask?.cancel()
+        historyTask?.cancel()
+        eagerRecoveryTask?.cancel()
+        prewarmTask?.cancel()
+
+        onDemandTasks.values.forEach { $0.cancel() }
+        onDemandTasks.removeAll()
+
+        updatesTask?.cancel()
+    }
+
+    // MARK: - Public
+
+    func showUserError(_ text: String) {
+        errorText = text
+    }
+
+    func selectTemplate(id: Int) {
+        selectedTemplateId = id
+        templateIdText = String(format: "photo_to_video.template_selected".localizable, "\(id)")
+        ensurePreviewCachedForTemplate(id: id)
+    }
+
+    var selectedTemplateVideoURL: URL? {
+        guard let id = selectedTemplateId else { return nil }
+
+        if let local = cachedPreviewLocalURLByTemplateId[id], fileExists(local) {
+            return local
+        }
+        if let local = cachedPreviewLocalURLByTemplateId[id], !fileExists(local) {
+            cachedPreviewLocalURLByTemplateId[id] = nil
+        }
+
+        guard let t = templates.first(where: { $0.id == id }) else { return nil }
+
+        let short = (t.videoPreviewShort ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let full  = t.videoPreview.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !short.isEmpty, let u = URL(string: short) { return u }
+        if !full.isEmpty, let u = URL(string: full) { return u }
+        return nil
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+
+        isLoading = false
+        activeGenerationMessageId = nil
+
+        if let gid = activeGenerationId {
+            Task { [pendingService] in
+                await pendingService.remove(generationId: gid)
+            }
+        }
+        activeGenerationId = nil
+
+        if let messageId = activeStatusMessageId {
+            let cancelled = GenerationMessage(
+                id: messageId,
+                role: .assistant,
+                createdAt: Date(),
+                payload: .system("photo_to_video.cancelled".localizable)
+            )
+            replaceGenerationMessageInUI(updated: cancelled)
+            activeStatusMessageId = nil
+        } else {
+            messages.append(
+                GenerationMessage(role: .system, createdAt: Date(), payload: .system("photo_to_video.cancelled".localizable))
+            )
+        }
+    }
+
+    // MARK: - Updates subscription
+
+    func subscribeToThreadUpdates() {
+        updatesTask?.cancel()
+
+        updatesTask = Task { [weak self] in
+            guard let self else { return }
+
+            let stream = await self.updateCenter.stream()
+
+            for await updatedThreadId in stream {
+                if Task.isCancelled { break }
+                guard updatedThreadId == self.threadId else { continue }
+
+                let now = Date()
+                if now.timeIntervalSince(self.lastReloadAt) < 0.35 { continue }
+                self.lastReloadAt = now
+
+                #if DEBUG
+                print("🧾 GEN(PhotoToVideo): updateCenter -> reload threadId=\(self.threadId)")
+                #endif
+
+                await MainActor.run {
+                    self.loadHistoryIfExists()
+                    self.startEagerRecoveryIfNeeded()
+                }
+            }
+        }
+    }
+
+    // MARK: - Notifications (Variant A)
+
+    func markNotificationsAsReadForThisThreadIfNeeded() {
+        guard shouldLoadHistory else { return }
+
+        Task {
+            let list = await internalNotifications.list()
+
+            let targets = list.filter { n in
+                n.isRead == false
+                && n.payload.threadId == self.threadId
+                && n.payload.generationKind == self.kind
+            }
+
+            guard targets.isEmpty == false else { return }
+
+            for n in targets {
+                await internalNotifications.markRead(id: n.id)
+            }
+
+            #if DEBUG
+            print("🔔 GEN(PhotoToVideo): marked read \(targets.count) notifications for threadId=\(self.threadId)")
+            #endif
+        }
+    }
+}
+
+// MARK: - Shared (cross-file) UI helper
+
+extension PhotoToVideoChatViewModel {
+
+    func replaceGenerationMessageInUI(updated: GenerationMessage) {
+        var next = messages
+        if let idx = next.firstIndex(where: { $0.id == updated.id }) {
+            next[idx] = updated
+        } else {
+            next.append(updated)
+        }
+        messages = next
+    }
+
+    func fileExists(_ url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PhotoToVideoChatViewModel/PhotoToVideoChatViewModel+Generation.swift
+////////////////////////////////////////////////////////////
+
+
+import Foundation
+import UIKit
+
+extension PhotoToVideoChatViewModel {
+
+    // MARK: - Actions (generate)
+
+    func onGenerateTap(photoData: Data) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            let snap = await self.requestCounter.snapshot()
+
+            let gate = self.evaluateGate(snapshot: snap)
+            switch gate {
+            case .allow:
+                break
+            case .showPaywall:
+                self.shouldShowPaywall = true
+                return
+            case .showAlert(let title, let message):
+                self.limitAlert = LimitAlertItem(title: title, message: message, buttonTitle: "OK")
+                return
+            }
+
+            if snap.video >= self.debugVideoLimit {
+                self.showUserError(
+                    String(
+                        format: "photo_to_video_vm.generate.error.parallel_limit".localizable,
+                        self.debugVideoLimit
+                    )
+                )
+                return
+            }
+
+            let templateId = Self.parseTemplateId(from: self.templateIdText)
+            guard templateId > 0 else {
+                self.showUserError("photo_to_video_vm.generate.error.choose_template".localizable)
+                return
+            }
+
+            self.errorText = nil
+            self.lastResultURL = nil
+
+            self.task?.cancel()
+            self.task = nil
+
+            self.isLoading = true
+            self.activeGenerationMessageId = nil
+            self.activeStatusMessageId = nil
+            self.activeGenerationId = nil
+
+            let now = Date()
+
+            let userText = String(
+                format: "photo_to_video_vm.user.template_generation".localizable,
+                templateId
+            )
+
+            let attachment: GenerationAttachment? = {
+                let prepared = Self.preparePhotoForUpload(originalData: photoData)
+
+                guard let localURL = self.saveInputAttachmentToTemp(
+                    data: prepared.data,
+                    filenameHint: prepared.filename
+                ) else {
+                    return nil
+                }
+
+                return GenerationAttachment(
+                    kind: .image,
+                    localURL: localURL,
+                    previewLocalURL: localURL,
+                    filename: prepared.filename,
+                    mimeType: prepared.mimeType
+                )
+            }()
+
+            let userMessage = GenerationMessage(
+                role: .user,
+                createdAt: now,
+                payload: .text(userText),
+                attachments: attachment.map { [$0] } ?? []
+            )
+            self.messages.append(userMessage)
+            self.persistUserMessageToHistory(userMessage, previewSeed: userText)
+
+            let placeholderId = UUID()
+            self.activeStatusMessageId = placeholderId
+
+            let placeholderCreatedAt = Date()
+
+            let placeholder = GenerationMessage(
+                id: placeholderId,
+                role: .assistant,
+                createdAt: placeholderCreatedAt,
+                payload: .video(remoteURL: Self.placeholderRemoteURL, localURL: nil)
+            )
+
+            self.replaceGenerationMessageInUI(updated: placeholder)
+            self.persistAssistantPlaceholderToHistory(placeholder)
+
+            self.task = Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer { self.isLoading = false }
+
+                do {
+                    let prepared = Self.preparePhotoForUpload(originalData: photoData)
+                    let binary = PhotoBinary(
+                        data: prepared.data,
+                        filename: prepared.filename,
+                        mimeType: prepared.mimeType
+                    )
+
+                    let request = PhotoToVideoRequest(
+                        templateId: templateId,
+                        photo: binary
+                    )
+
+                    let started = try await self.useCase.start(request)
+                    try Task.checkCancellation()
+
+                    let generationId = started.id
+                    self.activeGenerationId = generationId
+                    let jobId = generationId.uuidString
+
+                    let record = PendingGenerationRecord(
+                        generationId: generationId,
+                        counterJobId: jobId,
+                        threadId: self.threadId,
+                        placeholderMessageId: placeholderId,
+                        generationKind: self.kind,
+                        category: .video,
+                        createdAt: Date()
+                    )
+
+                    await self.pendingService.upsert(record)
+
+                    #if DEBUG
+                    print("🧾 GEN(PhotoToVideo): pending upsert ok generationId=\(generationId) placeholderId=\(placeholderId) threadId=\(self.threadId)")
+                    #endif
+
+                    let terminal = try await self.useCase.poll(started: started)
+                    try Task.checkCancellation()
+
+                    let stillActive = (self.activeStatusMessageId == placeholderId)
+                    if stillActive == false {
+                        #if DEBUG
+                        print("🧾 GEN(PhotoToVideo): ignored late terminal generationId=\(generationId) placeholderId=\(placeholderId)")
+                        #endif
+                        return
+                    }
+
+                    guard let url = GenerationResultNormalizer.extractUsableResultURL(from: terminal) else {
+                        let reasonRaw = (terminal.error ?? "no_valid_result_url")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        let reason = reasonRaw.isEmpty ? "no_valid_result_url" : reasonRaw
+
+                        await self.requestCounter.releaseOnTerminalFail(
+                            category: .video,
+                            jobId: jobId,
+                            reason: reason
+                        )
+
+                        let resultText = terminal.result?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let assistantText = String(
+                            format: "photo_to_video_vm.generate.assistant.invalid_url".localizable,
+                            (resultText?.isEmpty == false ? resultText! : "photo_to_video_vm.common.dash".localizable)
+                        )
+
+                        let err = GenerationMessage(
+                            id: placeholderId,
+                            role: .assistant,
+                            createdAt: placeholderCreatedAt,
+                            payload: .text(assistantText)
+                        )
+
+                        self.replaceGenerationMessageInUI(updated: err)
+
+                        Task { [historyRepo = self.historyRepo, threadId = self.threadId] in
+                            try? await historyRepo.replaceMessage(
+                                threadId: threadId,
+                                messageId: placeholderId,
+                                newMessage: err
+                            )
+                        }
+
+                        _ = await self.internalNotifications.postGenerationFailed(
+                            generationKind: .photoToVideo,
+                            threadId: self.threadId,
+                            generationId: placeholderId,
+                            title: "Ошибка генерации: \(reason)",
+                            createdAt: Date()
+                        )
+
+                        await self.pendingService.remove(generationId: generationId)
+                        await self.updateCenter.post(threadId: self.threadId)
+
+                        #if DEBUG
+                        print("🧾 GEN(PhotoToVideo): terminal without url -> release & remove pending generationId=\(generationId) reason=\(reason)")
+                        #endif
+                        return
+                    }
+
+                    await self.requestCounter.commitSuccess(category: .video, jobId: jobId)
+
+                    self.lastResultURL = url
+                    _ = await self.internalNotifications.postGenerationReady(
+                        generationKind: .photoToVideo,
+                        threadId: self.threadId,
+                        generationId: placeholderId,
+                        title: "photo_to_video_vm.notification.title".localizable,
+                        createdAt: Date()
+                    )
+
+                    await self.updatePlaceholderRemoteAndDownload(
+                        messageId: placeholderId,
+                        originalCreatedAt: placeholderCreatedAt,
+                        remoteURL: url
+                    )
+
+                    await self.pendingService.remove(generationId: generationId)
+                    await self.updateCenter.post(threadId: self.threadId)
+
+                    #if DEBUG
+                    print("🧾 GEN(PhotoToVideo): success -> commit & remove pending generationId=\(generationId) url=\(url.absoluteString)")
+                    #endif
+
+                } catch is CancellationError {
+                    self.lastResultURL = nil
+                    self.errorText = nil
+
+                    let cancelled = GenerationMessage(
+                        id: placeholderId,
+                        role: .assistant,
+                        createdAt: Date(),
+                        payload: .system("photo_to_video_vm.system.cancelled".localizable)
+                    )
+                    self.replaceGenerationMessageInUI(updated: cancelled)
+
+                    Task { [historyRepo = self.historyRepo, threadId = self.threadId] in
+                        try? await historyRepo.replaceMessage(
+                            threadId: threadId,
+                            messageId: placeholderId,
+                            newMessage: cancelled
+                        )
+                    }
+
+                    if let gid = self.activeGenerationId {
+                        await self.pendingService.remove(generationId: gid)
+
+                        #if DEBUG
+                        print("🧾 GEN(PhotoToVideo): cancelled -> removed pending generationId=\(gid)")
+                        #endif
+                    }
+                    self.activeGenerationId = nil
+
+                } catch let e as GenerationPollingError {
+                    switch e {
+                    case .timeout:
+                        self.errorText = "photo_to_video_vm.generate.error.timeout_background".localizable
+
+                        #if DEBUG
+                        print("🧾 GEN(PhotoToVideo): timeout -> keep pending (no release, no remove)")
+                        #endif
+
+                    case .failed(let reason):
+                        let r = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let safe = r.isEmpty ? "failed" : r
+
+                        if let gid = self.activeGenerationId {
+                            await self.requestCounter.releaseOnTerminalFail(
+                                category: .video,
+                                jobId: gid.uuidString,
+                                reason: safe
+                            )
+                            await self.pendingService.remove(generationId: gid)
+                            await self.updateCenter.post(threadId: self.threadId)
+
+                            #if DEBUG
+                            print("🧾 GEN(PhotoToVideo): failed -> release & remove pending generationId=\(gid) reason=\(safe)")
+                            #endif
+                        }
+                        self.activeGenerationId = nil
+
+                        let assistantText = String(
+                            format: "photo_to_video_vm.generate.error.failed_prefix".localizable,
+                            safe
+                        )
+                        self.errorText = safe
+
+                        let err = GenerationMessage(
+                            id: placeholderId,
+                            role: .assistant,
+                            createdAt: Date(),
+                            payload: .error(assistantText)
+                        )
+                        self.replaceGenerationMessageInUI(updated: err)
+
+                        Task { [historyRepo = self.historyRepo, threadId = self.threadId] in
+                            try? await historyRepo.replaceMessage(
+                                threadId: threadId,
+                                messageId: placeholderId,
+                                newMessage: err
+                            )
+                        }
+
+                        self.persistAssistantErrorToHistory(assistantText)
+                        _ = await self.internalNotifications.postGenerationFailed(
+                            generationKind: .photoToVideo,
+                            threadId: self.threadId,
+                            generationId: placeholderId,
+                            title: "Ошибка генерации: \(safe)",
+                            createdAt: Date()
+                        )
+
+                    case .invalidState:
+                        self.errorText = "photo_to_video_vm.generate.error.invalid_state".localizable
+                    }
+
+                } catch {
+                    let pretty = String(describing: error)
+
+                    if let gid = self.activeGenerationId {
+                        await self.requestCounter.releaseOnTerminalFail(
+                            category: .video,
+                            jobId: gid.uuidString,
+                            reason: pretty
+                        )
+                        await self.pendingService.remove(generationId: gid)
+                        await self.updateCenter.post(threadId: self.threadId)
+
+                        #if DEBUG
+                        print("🧾 GEN(PhotoToVideo): unexpected error -> release & remove pending generationId=\(gid) error=\(pretty)")
+                        #endif
+                    }
+                    self.activeGenerationId = nil
+
+                    self.lastResultURL = nil
+                    self.errorText = pretty
+
+                    let assistantText = String(
+                        format: "photo_to_video_vm.generate.error.failed_prefix".localizable,
+                        pretty
+                    )
+
+                    let err = GenerationMessage(
+                        id: placeholderId,
+                        role: .assistant,
+                        createdAt: Date(),
+                        payload: .error(assistantText)
+                    )
+                    self.replaceGenerationMessageInUI(updated: err)
+
+                    Task { [historyRepo = self.historyRepo, threadId = self.threadId] in
+                        try? await historyRepo.replaceMessage(
+                            threadId: threadId,
+                            messageId: placeholderId,
+                            newMessage: err
+                        )
+                    }
+
+                    self.persistAssistantErrorToHistory(assistantText)
+                }
+            }
+        }
+    }
+
+    // MARK: - Input attachment helpers (local)
+
+    func saveInputAttachmentToTemp(data: Data, filenameHint: String) -> URL? {
+        let clean = filenameHint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ext = URL(fileURLWithPath: clean).pathExtension.isEmpty
+        ? "jpg"
+        : URL(fileURLWithPath: clean).pathExtension
+
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gen_input_attachments", isDirectory: true)
+
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            #if DEBUG
+            print("🧾 INPUT_ATTACH(PhotoToVideo): create dir failed error=\(error)")
+            #endif
+            return nil
+        }
+
+        let fileURL = dir
+            .appendingPathComponent("input_\(UUID().uuidString)")
+            .appendingPathExtension(ext)
+
+        do {
+            try data.write(to: fileURL, options: [.atomic])
+            #if DEBUG
+            print("🧾 INPUT_ATTACH(PhotoToVideo): saved \(fileURL.lastPathComponent) bytes=\(data.count)")
+            #endif
+            return fileURL
+        } catch {
+            #if DEBUG
+            print("🧾 INPUT_ATTACH(PhotoToVideo): save failed error=\(error)")
+            #endif
+            return nil
+        }
+    }
+
+    // MARK: - Placeholder → replace remote → download local → replace (guarded)
+
+    fileprivate func updatePlaceholderRemoteAndDownload(
+        messageId: UUID,
+        originalCreatedAt: Date,
+        remoteURL: URL
+    ) async {
+        let repo = historyRepo
+        let id = threadId
+        let now = Date()
+
+        activeGenerationMessageId = messageId
+
+        do {
+            await ensureThreadRegisteredAsync()
+
+            guard self.activeGenerationMessageId == messageId else {
+                #if DEBUG
+                print("🧾 GEN_MEDIA(PhotoToVideo): ignored late remote msgId=\(messageId)")
+                #endif
+                return
+            }
+
+            let updatedRemote = GenerationMessage(
+                id: messageId,
+                role: .assistant,
+                createdAt: originalCreatedAt,
+                payload: .video(remoteURL: remoteURL, localURL: nil)
+            )
+
+            replaceGenerationMessageInUI(updated: updatedRemote)
+
+            do {
+                try await repo.replaceMessage(threadId: id, messageId: messageId, newMessage: updatedRemote)
+            } catch {
+                try await repo.appendMessage(threadId: id, message: updatedRemote)
+            }
+
+            try await touchThread(preview: "photo_to_video_vm.thread.preview.video".localizable, at: Date())
+
+            #if DEBUG
+            print("🧾 GEN_MEDIA(PhotoToVideo): placeholder updated to real remote threadId=\(id) msgId=\(messageId) remote=\(remoteURL.absoluteString)")
+            #endif
+
+            let localURL = try await mediaCache.fetch(
+                remoteURL: remoteURL,
+                threadId: id,
+                kind: "video"
+            )
+            try Task.checkCancellation()
+
+            guard self.activeGenerationMessageId == messageId else {
+                #if DEBUG
+                print("🧾 GEN_MEDIA(PhotoToVideo): ignored late download msgId=\(messageId)")
+                #endif
+                return
+            }
+
+            let updatedLocal = GenerationMessage(
+                id: messageId,
+                role: updatedRemote.role,
+                createdAt: updatedRemote.createdAt,
+                payload: .video(remoteURL: remoteURL, localURL: localURL)
+            )
+
+            try await repo.replaceMessage(threadId: id, messageId: messageId, newMessage: updatedLocal)
+            replaceGenerationMessageInUI(updated: updatedLocal)
+
+            tryTriggerRateUsAfterSuccessfulResult()
+
+            try await touchThread(preview: "photo_to_video_vm.thread.preview.done_video".localizable, at: Date())
+
+            let didCreate = await internalNotifications.postGenerationReady(
+                generationKind: .photoToVideo,
+                threadId: id,
+                generationId: messageId,
+                title: "photo_to_video_vm.notification.title".localizable,
+                createdAt: Date()
+            )
+
+            if self.activeStatusMessageId == messageId {
+                self.activeStatusMessageId = nil
+            }
+
+            #if DEBUG
+            print("🔔 GEN(PhotoToVideo): post ready didCreate=\(didCreate) threadId=\(id) generationId=\(messageId)")
+            print("🧾 GEN_MEDIA(PhotoToVideo): replaced with local threadId=\(id) msgId=\(messageId) local=\(localURL.path)")
+            #endif
+
+        } catch is CancellationError {
+            let cancelled = GenerationMessage(
+                id: messageId,
+                role: .assistant,
+                createdAt: now,
+                payload: .system("photo_to_video_vm.system.cancelled".localizable)
+            )
+            replaceGenerationMessageInUI(updated: cancelled)
+
+        } catch {
+            let pretty = String(describing: error)
+
+            let warningText = String(
+                format: "photo_to_video_vm.download.error".localizable,
+                pretty
+            )
+
+            let warning = GenerationMessage(
+                id: messageId,
+                role: .assistant,
+                createdAt: originalCreatedAt,
+                payload: .error(warningText)
+            )
+            replaceGenerationMessageInUI(updated: warning)
+
+            #if DEBUG
+            print("🧾 GEN_MEDIA(PhotoToVideo): failed msgId=\(messageId) error=\(pretty)")
+            #endif
+        }
+    }
+
+    // MARK: - History helper (assistant placeholder)
+
+    fileprivate func persistAssistantPlaceholderToHistory(_ msg: GenerationMessage) {
+        let repo = historyRepo
+        let id = threadId
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                await self.ensureThreadRegisteredAsync()
+
+                try await repo.appendMessage(threadId: id, message: msg)
+                try await self.touchThread(
+                    preview: "photo_to_video_vm.thread.preview.video".localizable,
+                    at: msg.createdAt
+                )
+
+                #if DEBUG
+                print("🧾 GEN_HISTORY(PhotoToVideo): saved assistant placeholder threadId=\(id) msgId=\(msg.id)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("🧾 GEN_HISTORY(PhotoToVideo): persist assistant placeholder failed: \(error)")
+                #endif
+            }
+        }
+    }
+
+    // MARK: - Small helpers
+
+    fileprivate static func parseTemplateId(from text: String) -> Int {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        let digits = trimmed.filter(\.isNumber)
+        return Int(digits) ?? 0
+    }
+
+    fileprivate static var placeholderRemoteURL: URL {
+        URL(string: "https://example.com/video.mp4")!
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PhotoToVideoChatViewModel/PhotoToVideoChatViewModel+History.swift
+////////////////////////////////////////////////////////////
+
+
+import Foundation
+
+extension PhotoToVideoChatViewModel {
+
+    // MARK: - Load history + eager recovery
+
+    func loadHistoryIfExists() {
+        let repo = historyRepo
+        let id = threadId
+
+        historyTask?.cancel()
+        historyTask = Task { [weak self] in
+            guard let self else { return }
+
+            do {
+                let stored = try await repo.loadMessages(threadId: id)
+                guard stored.isEmpty == false else { return }
+
+                self.messages = stored.sorted(by: { $0.createdAt < $1.createdAt })
+
+                #if DEBUG
+                print("🧾 GEN_HISTORY: loaded \(self.messages.count) messages for thread id=\(id)")
+                #endif
+
+                self.startEagerRecoveryIfNeeded()
+
+            } catch is CancellationError {
+            } catch {
+                #if DEBUG
+                print("🧾 GEN_HISTORY: load history failed: \(error)")
+                #endif
+            }
+        }
+    }
+
+
+     func startEagerRecoveryIfNeeded() {
+        guard eagerRecoveryTask == nil else { return }
+
+        eagerRecoveryTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.eagerRecoveryTask = nil }
+            await self.recoverMissingMediaIfNeeded()
+        }
+    }
+
+     func recoverMissingMediaIfNeeded() async {
+        let id = threadId
+        let repo = historyRepo
+
+        let snapshot = messages
+
+        let candidates: [(msg: GenerationMessage, kind: String, remote: URL)] = snapshot.compactMap { msg in
+            switch msg.payload {
+            case .image(let remote, let local):
+                if let local, fileExists(local) { return nil }
+                return (msg, "image", remote)
+
+            case .video(let remote, let local):
+                if let local, fileExists(local) { return nil }
+                return (msg, "video", remote)
+
+            default:
+                return nil
+            }
+        }
+
+        guard candidates.isEmpty == false else {
+            #if DEBUG
+            print("🧾 MEDIA_RECOVERY(open PhotoToVideo): nothing to recover threadId=\(id)")
+            #endif
+            return
+        }
+
+        #if DEBUG
+        print("🧾 MEDIA_RECOVERY(open PhotoToVideo): start threadId=\(id) items=\(candidates.count)")
+        #endif
+
+        for c in candidates {
+            if Task.isCancelled { break }
+
+            if eagerRecoveryInFlight.contains(c.msg.id) { continue }
+            eagerRecoveryInFlight.insert(c.msg.id)
+            defer { eagerRecoveryInFlight.remove(c.msg.id) }
+
+            do {
+                let local = try await mediaCache.fetch(
+                    remoteURL: c.remote,
+                    threadId: id,
+                    kind: c.kind
+                )
+                try Task.checkCancellation()
+
+                let updated = makeUpdatedMediaMessage(
+                    original: c.msg,
+                    kind: c.kind,
+                    remoteURL: c.remote,
+                    localURL: local
+                )
+
+                try await repo.replaceMessage(threadId: id, messageId: updated.id, newMessage: updated)
+                replaceGenerationMessageInUI(updated: updated)
+
+                #if DEBUG
+                print("🧾 MEDIA_RECOVERY(open PhotoToVideo): success threadId=\(id) msgId=\(updated.id) kind=\(c.kind) local=\(local.path)")
+                #endif
+
+            } catch is CancellationError {
+                #if DEBUG
+                print("🧾 MEDIA_RECOVERY(open PhotoToVideo): cancelled threadId=\(id)")
+                #endif
+                break
+
+            } catch {
+                #if DEBUG
+                print("🚨 MEDIA_RECOVERY(open PhotoToVideo): failed threadId=\(id) msgId=\(c.msg.id) kind=\(c.kind) error=\(error)")
+                #endif
+            }
+        }
+    }
+
+     func makeUpdatedMediaMessage(
+        original: GenerationMessage,
+        kind: String,
+        remoteURL: URL,
+        localURL: URL
+    ) -> GenerationMessage {
+        switch kind {
+        case "image":
+            return GenerationMessage(
+                id: original.id,
+                role: original.role,
+                createdAt: original.createdAt,
+                payload: .image(remoteURL: remoteURL, localURL: localURL)
+            )
+        case "video":
+            return GenerationMessage(
+                id: original.id,
+                role: original.role,
+                createdAt: original.createdAt,
+                payload: .video(remoteURL: remoteURL, localURL: localURL)
+            )
+        default:
+            return original
+        }
+    }
+
+    // MARK: - History persists (NEW)
+
+    func persistUserMessageToHistory(_ message: GenerationMessage, previewSeed: String) {
+        let repo = historyRepo
+        let id = threadId
+
+        let preview = Self.makePreviewText(previewSeed)
+
+        Task {
+            do {
+                await self.ensureThreadRegisteredAsync()
+
+                try await repo.appendMessage(threadId: id, message: message)
+                try await self.touchThread(preview: preview, at: message.createdAt)
+
+                #if DEBUG
+                print("🧾 GEN_HISTORY: saved user message (with attachments=\(message.attachments.count)) threadId=\(id) msgId=\(message.id)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("🧾 GEN_HISTORY: persist user message failed: \(error)")
+                #endif
+            }
+        }
+    }
+
+    // MARK: - Existing persists (unchanged)
+
+    func persistUserTextToHistory(_ text: String) {
+        let repo = historyRepo
+        let id = threadId
+        let now = Date()
+
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+
+        let preview = Self.makePreviewText(clean)
+
+        Task {
+            do {
+                await self.ensureThreadRegisteredAsync()
+
+                let msg = GenerationMessage(
+                    role: .user,
+                    createdAt: now,
+                    payload: .text(clean)
+                )
+                try await repo.appendMessage(threadId: id, message: msg)
+                try await self.touchThread(preview: preview, at: now)
+
+                #if DEBUG
+                print("🧾 GEN_HISTORY: saved user text + updated thread preview id=\(id)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("🧾 GEN_HISTORY: persist user text failed: \(error)")
+                #endif
+            }
+        }
+    }
+
+     func persistAssistantErrorToHistory(_ text: String) {
+        persistAssistantPayloadToHistory(payload: .error(text), previewSeed: text)
+    }
+
+     func persistAssistantPayloadToHistory(payload: GenerationPayload, previewSeed: String) {
+        let repo = historyRepo
+        let id = threadId
+        let now = Date()
+
+        let preview = Self.makePreviewText(previewSeed)
+
+        Task {
+            do {
+                await self.ensureThreadRegisteredAsync()
+
+                let msg = GenerationMessage(
+                    role: .assistant,
+                    createdAt: now,
+                    payload: payload
+                )
+                try await repo.appendMessage(threadId: id, message: msg)
+                try await self.touchThread(preview: preview, at: now)
+
+                #if DEBUG
+                print("🧾 GEN_HISTORY: saved assistant message + updated thread preview id=\(id)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("🧾 GEN_HISTORY: persist assistant message failed: \(error)")
+                #endif
+            }
+        }
+    }
+
+     static func makePreviewText(_ text: String, limit: Int = 80) -> String {
+        let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard s.count > limit else { return s }
+        let idx = s.index(s.startIndex, offsetBy: limit)
+        return String(s[..<idx]) + "…"
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PhotoToVideoChatViewModel/PhotoToVideoChatViewModel+InputAttachments.swift
+////////////////////////////////////////////////////////////
+
+
+
+import Foundation
+import UIKit
+
+extension PhotoToVideoChatViewModel {
+
+    // MARK: - Input attachment (local-only)
+
+    func saveInputPhotoToLocalFile(originalData: Data) throws -> URL {
+        let prepared = Self.preparePhotoForUpload(originalData: originalData)
+
+        let ext: String = {
+            let mime = prepared.mimeType.lowercased()
+            if mime.contains("png") { return "png" }
+            if mime.contains("jpeg") || mime.contains("jpg") { return "jpg" }
+            return "bin"
+        }()
+
+        let dir = try ensureInputAttachmentsDirectory()
+        let fileURL = dir.appendingPathComponent("input_photo_\(UUID().uuidString).\(ext)", isDirectory: false)
+
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+
+        try prepared.data.write(to: fileURL, options: [.atomic])
+
+        #if DEBUG
+        let size = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value
+        print("📎 INPUT_ATTACH(PhotoToVideo): saved local photo file=\(fileURL.lastPathComponent) size=\(size.map(String.init) ?? "nil")")
+        #endif
+
+        return fileURL
+    }
+
+    private func ensureInputAttachmentsDirectory() throws -> URL {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        let dir = (base ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent("generation_input_attachments", isDirectory: true)
+            .appendingPathComponent(threadId.uuidString, isDirectory: true)
+
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    // MARK: - History persist for input photo
+
+    func persistUserInputPhotoToHistory(localFileURL: URL, createdAt: Date) {
+        let repo = historyRepo
+        let id = threadId
+
+        Task {
+            do {
+                await self.ensureThreadRegisteredAsync()
+
+                let msg = GenerationMessage(
+                    role: .user,
+                    createdAt: createdAt,
+                    payload: .image(remoteURL: localFileURL, localURL: localFileURL)
+                )
+
+                try await repo.appendMessage(threadId: id, message: msg)
+                try await self.touchThread(preview: "📎 Photo", at: createdAt)
+
+                #if DEBUG
+                print("🧾 GEN_HISTORY(PhotoToVideo): saved user input photo msgId=\(msg.id) file=\(localFileURL.lastPathComponent)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("🧾 GEN_HISTORY(PhotoToVideo): persist user input photo failed: \(error)")
+                #endif
+            }
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PhotoToVideoChatViewModel/PhotoToVideoChatViewModel+OnDemandCache.swift
+////////////////////////////////////////////////////////////
+
+
+
+import Foundation
+
+extension PhotoToVideoChatViewModel {
+
+
+    func ensurePreviewCachedForSelectedTemplate() {
+        guard let id = selectedTemplateId else { return }
+        ensurePreviewCachedForTemplate(id: id)
+    }
+
+    func ensurePreviewCachedForTemplate(id: Int) {
+        if let local = cachedPreviewLocalURLByTemplateId[id], fileExists(local) {
+            return
+        }
+
+        if let local = cachedPreviewLocalURLByTemplateId[id], !fileExists(local) {
+            cachedPreviewLocalURLByTemplateId[id] = nil
+        }
+
+        if let t = onDemandTasks[id] {
+            if !t.isCancelled { return }
+            onDemandTasks[id] = nil
+        }
+
+        guard let template = templates.first(where: { $0.id == id }) else { return }
+        guard let remote = bestPreviewRemoteURL(for: template) else { return }
+
+        #if DEBUG
+        print("🎞️ ONDEMAND start templateId=\(id)")
+        #endif
+
+        let t = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                Task { @MainActor [weak self] in
+                    self?.onDemandTasks[id] = nil
+                }
+            }
+
+            do {
+                let local = try await self.templateVideoCache.fetch(remoteURL: remote)
+                try Task.checkCancellation()
+
+                await MainActor.run {
+                    self.cachedPreviewLocalURLByTemplateId[id] = local
+                }
+
+                #if DEBUG
+                print("🎞️ ONDEMAND ok templateId=\(id) local=\(local.lastPathComponent)")
+                #endif
+
+            } catch is CancellationError {
+                #if DEBUG
+                print("🎞️ ONDEMAND cancelled templateId=\(id)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("🎞️ ONDEMAND failed templateId=\(id) error=\(error)")
+                #endif
+            }
+        }
+
+        onDemandTasks[id] = t
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PhotoToVideoChatViewModel/PhotoToVideoChatViewModel+Prewarm.swift
+////////////////////////////////////////////////////////////
+
+
+
+import Foundation
+
+extension PhotoToVideoChatViewModel {
+
+
+     func startPrewarmIfNeeded() {
+        prewarmTask?.cancel()
+        prewarmTask = nil
+
+        guard !templates.isEmpty else { return }
+
+        let slice = Array(templates.prefix(prewarmCount))
+
+        var queue: [(id: Int, remote: URL)] = []
+        queue.reserveCapacity(slice.count)
+
+        for t in slice {
+            guard let best = bestPreviewRemoteURL(for: t) else { continue }
+
+            if let local = cachedPreviewLocalURLByTemplateId[t.id], fileExists(local) {
+                continue
+            }
+            if let local = cachedPreviewLocalURLByTemplateId[t.id], !fileExists(local) {
+                cachedPreviewLocalURLByTemplateId[t.id] = nil
+            }
+
+            queue.append((t.id, best))
+        }
+
+        if queue.isEmpty {
+            #if DEBUG
+            print("🎞️ PREWARM: nothing to do (already cached or no urls)")
+            #endif
+            return
+        }
+
+        #if DEBUG
+        print("🎞️ PREWARM start count=\(min(prewarmCount, templates.count)) tasks=\(queue.count) parallel=\(prewarmParallelism)")
+        #endif
+
+        prewarmTask = Task { [weak self] in
+            guard let self else { return }
+
+            var index = 0
+
+            func nextJob() -> (id: Int, remote: URL)? {
+                if index >= queue.count { return nil }
+                let job = queue[index]
+                index += 1
+                return job
+            }
+
+            await withTaskGroup(of: Void.self) { group in
+                let workers = max(1, self.prewarmParallelism)
+
+                for _ in 0..<workers {
+                    group.addTask { [weak self] in
+                        guard let self else { return }
+
+                        while true {
+                            let job: (id: Int, remote: URL)? = await MainActor.run { nextJob() }
+                            guard let job else { break }
+                            if Task.isCancelled { break }
+
+                            do {
+                                let local = try await self.templateVideoCache.fetch(remoteURL: job.remote)
+                                try Task.checkCancellation()
+
+                                await MainActor.run {
+                                    if let existing = self.cachedPreviewLocalURLByTemplateId[job.id],
+                                       self.fileExists(existing) {
+                                        return
+                                    }
+                                    self.cachedPreviewLocalURLByTemplateId[job.id] = local
+                                }
+
+                                #if DEBUG
+                                print("🎞️ PREWARM ok templateId=\(job.id) local=\(local.lastPathComponent)")
+                                #endif
+
+                            } catch is CancellationError {
+                                break
+                            } catch {
+                                #if DEBUG
+                                print("🎞️ PREWARM failed templateId=\(job.id) error=\(error)")
+                                #endif
+                            }
+                        }
+                    }
+                }
+
+                await group.waitForAll()
+            }
+
+            #if DEBUG
+            print("🎞️ PREWARM done")
+            #endif
+        }
+    }
+
+     func bestPreviewRemoteURL(for t: VideoTemplateDTO) -> URL? {
+        let short = (t.videoPreviewShort ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !short.isEmpty, let u = URL(string: short) { return u }
+
+        let full = t.videoPreview.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !full.isEmpty, let u = URL(string: full) { return u }
+
+        return nil
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PhotoToVideoChatViewModel/PhotoToVideoChatViewModel+Templates.swift
+////////////////////////////////////////////////////////////
+
+
+
+import Foundation
+
+extension PhotoToVideoChatViewModel {
+
+    func ensureTemplatesLoadedOnAppear(lang: String = "en") {
+        guard templateGroups.isEmpty else { return }
+        guard !isTemplatesLoading else { return }
+        loadVideoTemplates(lang: lang)
+    }
+
+    func loadVideoTemplates(userId: String? = nil, tag: String? = nil, lang: String = "en") {
+        templatesErrorText = nil
+        isTemplatesLoading = true
+
+        templatesTask?.cancel()
+        templatesTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.isTemplatesLoading = false }
+
+            do {
+                let groups = try await templatesService.getVideoTemplates(
+                    userId: userId,
+                    tag: tag,
+                    lang: lang
+                )
+
+                self.templateGroups = groups
+                self.templates = Self.flattenTemplates(groups: groups)
+
+                #if DEBUG
+                print("🎞️ TEMPLATES: templates.count = \(self.templates.count)")
+                #endif
+
+                self.startPrewarmIfNeeded()
+
+            } catch is CancellationError {
+            } catch {
+                self.templatesErrorText = String(describing: error)
+            }
+        }
+    }
+
+    fileprivate static func flattenTemplates(groups: [VideoTemplateGroupDTO]) -> [VideoTemplateDTO] {
+        var seen: Set<Int> = []
+        var out: [VideoTemplateDTO] = []
+        out.reserveCapacity(groups.reduce(0) { $0 + $1.videos.count })
+
+        for g in groups {
+            for v in g.videos {
+                let preview = v.photoPreview.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !preview.isEmpty else { continue }
+
+                guard !seen.contains(v.id) else { continue }
+                seen.insert(v.id)
+
+                out.append(v)
+            }
+        }
+
+        return out
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PhotoToVideoChatViewModel/PhotoToVideoChatViewModel+Thread.swift
+////////////////////////////////////////////////////////////
+
+
+
+import Foundation
+
+extension PhotoToVideoChatViewModel {
+
+    // MARK: - Thread helpers
+
+    func ensureThreadRegistered() {
+        Task { [weak self] in
+            await self?.ensureThreadRegisteredAsync()
+        }
+    }
+
+     func ensureThreadRegisteredAsync() async {
+        let repo = historyRepo
+        let id = threadId
+
+        do {
+            let threads = try await repo.fetchThreads()
+            if threads.contains(where: { $0.id == id }) { return }
+
+            try await repo.upsert(GenerationThread(id: id, kind: kind))
+
+            #if DEBUG
+            print("🧾 GEN_HISTORY thread created: id=\(id) kind=\(kind.rawValue)")
+            #endif
+        } catch {
+            #if DEBUG
+            print("🧾 GEN_HISTORY thread create failed: \(error)")
+            #endif
+        }
+    }
+
+     func touchThread(preview: String?, at date: Date) async throws {
+        let repo = historyRepo
+        let id = threadId
+
+        var threads = try await repo.fetchThreads()
+        if let idx = threads.firstIndex(where: { $0.id == id }) {
+            var t = threads[idx]
+            t.touch(preview: preview, at: date)
+            try await repo.upsert(t)
+        } else {
+            var t = GenerationThread(id: id, kind: kind)
+            t.touch(preview: preview, at: date)
+            try await repo.upsert(t)
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: PhotoToVideoChatViewModel/PhotoToVideoChatViewModel+Upload.swift
+////////////////////////////////////////////////////////////
+
+
+
+import Foundation
+import UIKit
+
+extension PhotoToVideoChatViewModel {
+
+    // MARK: - Upload preparation (JPEG)
+
+     static func preparePhotoForUpload(originalData: Data) -> (data: Data, mimeType: String, filename: String) {
+        if let image = UIImage(data: originalData),
+           let jpeg = image.jpegData(compressionQuality: 0.92),
+           !jpeg.isEmpty {
+            return (jpeg, "image/jpeg", "photo.jpg")
+        }
+
+        let detected = detectMimeAndFilename(from: originalData)
+        return (originalData, detected.mime, detected.filename)
+    }
+
+     static func detectMimeAndFilename(from data: Data) -> (mime: String, filename: String) {
+        let png: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        if data.starts(with: png) { return ("image/png", "photo.png") }
+
+        let jpg: [UInt8] = [0xFF, 0xD8, 0xFF]
+        if data.starts(with: jpg) { return ("image/jpeg", "photo.jpg") }
+
+        return ("application/octet-stream", "photo.bin")
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+// FILE: Templates/InlineAutoplayVideoPreview.swift
+////////////////////////////////////////////////////////////
+
+
+import SwiftUI
+import AVFoundation
+import UIKit
+
+struct InlineAutoplayVideoPreview: View {
+
+    let url: URL?
+    let playToken: UUID
+    let onFinished: () -> Void
+
+    @State private var player: AVPlayer?
+    @State private var item: AVPlayerItem?
+
+    @State private var didFinishObserver: NSObjectProtocol?
+    @State private var statusObserver: NSKeyValueObservation?
+
+    @State private var isLoading: Bool = false
+    @State private var didStartPlaying: Bool = false
+
+    private let loadingTimeoutSec: UInt64 = 8
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.06)
+
+            if let player {
+                PlayerLayerView(player: player)
+                    .onDisappear { cleanup() }
+            }
+
+            if isLoading {
+                ProgressView()
+            }
+        }
+        .onAppear { restart() }
+        .onChange(of: playToken) { _ in restart() }
+        .onChange(of: url?.absoluteString) { _ in restart() }
+    }
+
+    @MainActor
+    private func restart() {
+        cleanup()
+
+        guard let url else { return }
+
+        isLoading = true
+        didStartPlaying = false
+
+        let newItem = AVPlayerItem(url: url)
+
+        let newPlayer = AVPlayer(playerItem: newItem)
+        newPlayer.isMuted = true
+        newPlayer.actionAtItemEnd = .pause
+        newPlayer.automaticallyWaitsToMinimizeStalling = false
+
+        self.item = newItem
+        self.player = newPlayer
+
+        didFinishObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: newItem,
+            queue: .main
+        ) { _ in
+            onFinished()
+        }
+
+        statusObserver = newItem.observe(\.status, options: [.initial, .new]) { [weak newPlayer] item, _ in
+            DispatchQueue.main.async {
+                switch item.status {
+                case .readyToPlay:
+                    self.isLoading = false
+                    self.didStartPlaying = true
+                    newPlayer?.seek(to: .zero)
+                    newPlayer?.play()
+
+                case .failed:
+                    self.isLoading = false
+                    #if DEBUG
+                    print("🎞️ InlinePreview failed: \(item.error?.localizedDescription ?? "unknown") url=\(url.absoluteString)")
+                    #endif
+                    self.onFinished()
+
+                case .unknown:
+                    break
+
+                @unknown default:
+                    break
+                }
+            }
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: loadingTimeoutSec * 1_000_000_000)
+
+            guard self.item === newItem else { return }
+            guard self.didStartPlaying == false else { return }
+
+            #if DEBUG
+            print("🎞️ InlinePreview timeout (\(loadingTimeoutSec)s): still not ready url=\(url.absoluteString)")
+            #endif
+
+            self.isLoading = false
+            self.onFinished()
+        }
+    }
+
+    @MainActor
+    private func cleanup() {
+        if let didFinishObserver {
+            NotificationCenter.default.removeObserver(didFinishObserver)
+            self.didFinishObserver = nil
+        }
+        statusObserver?.invalidate()
+        statusObserver = nil
+
+        player?.pause()
+        player = nil
+        item = nil
+
+        isLoading = false
+        didStartPlaying = false
+    }
+}
+
+private struct PlayerLayerView: UIViewRepresentable {
+
+    let player: AVPlayer
+
+    func makeUIView(context: Context) -> PlayerUIView {
+        let v = PlayerUIView()
+        v.setPlayer(player)
+        return v
+    }
+
+    func updateUIView(_ uiView: PlayerUIView, context: Context) {
+        uiView.setPlayer(player)
+    }
+}
+
+private final class PlayerUIView: UIView {
+
+    override static var layerClass: AnyClass { AVPlayerLayer.self }
+    private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+
+    func setPlayer(_ player: AVPlayer) {
+        playerLayer.player = player
+        playerLayer.videoGravity = .resizeAspectFill
+    }
+}
+
+

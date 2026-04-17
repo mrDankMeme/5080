@@ -1,0 +1,497 @@
+import SwiftUI
+import Combine
+import OSLog
+import Adapty
+import StoreKit
+
+@MainActor
+final class PurchaseManager: ObservableObject {
+    private let billingProvider: BillingProvider = AdaptyBillingProvider()
+    private let backendService: MiniMaxBackendService = PurchaseManager.makeBackendService()
+
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.nat.5043minimax", category: "PurchaseManager")
+
+    enum PurchaseState: Equatable {
+        case idle
+        case loading
+        case ready
+        case purchasing
+        case error(String)
+
+        static func == (lhs: PurchaseState, rhs: PurchaseState) -> Bool {
+            switch (lhs, rhs) {
+            case (.idle, .idle), (.loading, .loading), (.ready, .ready), (.purchasing, .purchasing):
+                return true
+            case (.error(let lhsMsg), .error(let rhsMsg)):
+                return lhsMsg == rhsMsg
+            default:
+                return false
+            }
+        }
+    }
+
+    @Published private(set) var paywall: BillingPaywall?
+    @Published private(set) var products: [BillingProduct] = []
+    @Published private(set) var tokenPaywall: BillingPaywall?
+    @Published private(set) var tokenProducts: [BillingProduct] = []
+    @Published private(set) var tokenPurchaseError: String? = nil
+    @Published private(set) var isSubscribed: Bool = false
+    @Published private(set) var purchaseState: PurchaseState = .idle
+    @Published var purchaseError: String? = nil
+    @Published var failRestoreText: String? = nil
+    @Published var userId: String = ""
+    @Published private(set) var availableGenerations: Int = 0
+    @Published private(set) var activeSubscriptionPlanTitle: String?
+    @Published private(set) var servicePricesByKey: [String: Int] = [:]
+    @Published private(set) var klingModelPrices: [KlingModelPrice] = []
+
+    @AppStorage("OnBoardEnd") var isOnboardingFinished: Bool = false
+    @Published var isShowedPaywall: Bool = false
+
+    var isReady: Bool {
+        purchaseState == .ready && !products.isEmpty && paywall != nil
+    }
+
+    var isTokensReady: Bool {
+        purchaseState != .loading && !tokenProducts.isEmpty && tokenPaywall != nil
+    }
+
+    var isLoading: Bool {
+        purchaseState == .loading || purchaseState == .purchasing
+    }
+
+    @MainActor
+    static let shared = PurchaseManager()
+
+    private init() {
+        logger.info("PurchaseManager: Initializing billing manager")
+        purchaseState = .loading
+        self.userId = billingProvider.userID()
+        self.isSubscribed = billingProvider.hasPremiumAccessSync()
+        self.activeSubscriptionPlanTitle = isSubscribed ? "Premium Plan" : nil
+        self.isShowedPaywall = !isSubscribed && isOnboardingFinished
+
+        Task {
+            await loadPaywalls()
+            await refreshSubscriptionStatusFromProvider()
+        }
+    }
+
+    func loadPaywalls() async {
+        logger.info("PurchaseManager: Starting paywall fetch")
+        do {
+            let paywalls = try await billingProvider.loadPaywalls()
+            let fetchedPaywallsDescription = self.paywallDebugDescription(paywalls)
+            logger.info(
+                "PurchaseManager: Fetched \(paywalls.count) paywalls -> \(fetchedPaywallsDescription, privacy: .public)"
+            )
+            self.configure(with: paywalls)
+        } catch {
+            logger.error("PurchaseManager: Failed to load paywalls - \(error.localizedDescription)")
+            self.paywall = nil
+            self.products = []
+            self.tokenPaywall = nil
+            self.tokenProducts = []
+            self.tokenPurchaseError = "Token packs not available. Please check your connection and try again."
+            self.purchaseState = .error("Subscription options not available. Please check your connection and try again.")
+            self.purchaseError = "Subscription options not available. Please check your connection and try again."
+        }
+    }
+
+    private func configure(with paywalls: [BillingPaywall]) {
+        let receivedPaywallsDescription = self.paywallDebugDescription(paywalls)
+        logger.info(
+            "PurchaseManager: Configuring paywalls. received=\(receivedPaywallsDescription, privacy: .public)"
+        )
+        guard let paywall = paywalls.first(where: { $0.id == BillingConfig.adaptyMainPlacementID }) ?? paywalls.first else {
+            logger.error("PurchaseManager: Paywall with identifier 'main' not found")
+            purchaseState = .error("Subscription options not available. Please check your connection and try again.")
+            purchaseError = "Subscription options not available. Please check your connection and try again."
+            return
+        }
+
+        self.paywall = paywall
+        self.products = paywall.products
+        logger.info("PurchaseManager: Configured paywall 'main' with \(self.products.count) products")
+
+        if self.products.isEmpty {
+            logger.warning("PurchaseManager: Paywall 'main' has no products!")
+            purchaseState = .error("No subscription products available. Please try again later.")
+            purchaseError = "No subscription products available. Please try again later."
+        } else {
+            purchaseState = .ready
+            purchaseError = nil
+            logger.info("PurchaseManager: Products ready: \(self.products.map { $0.id }.joined(separator: ", "))")
+        }
+
+        if let tokenPaywall = paywalls.first(where: { $0.id == BillingConfig.adaptyTokensPlacementID }),
+           !tokenPaywall.products.isEmpty {
+            self.tokenPaywall = tokenPaywall
+            self.tokenProducts = tokenPaywall.products
+            self.tokenPurchaseError = nil
+            let tokenProductsDescription = self.productDebugDescription(self.tokenProducts)
+            logger.info(
+                "PurchaseManager: Configured paywall 'tokens' with \(self.tokenProducts.count) products -> \(tokenProductsDescription, privacy: .public)"
+            )
+        } else {
+            self.tokenPaywall = nil
+            self.tokenProducts = []
+            self.tokenPurchaseError = "Token packs are unavailable. Please try again later."
+            logger.warning(
+                "PurchaseManager: Paywall 'tokens' not found or has no products. received=\(receivedPaywallsDescription, privacy: .public)"
+            )
+        }
+    }
+
+    func makePurchase(product: BillingProduct, completion: @escaping(Bool, String?) -> Void) {
+        guard purchaseState != .purchasing else {
+            logger.warning("PurchaseManager: Purchase already in progress, ignoring duplicate request")
+            completion(false, "Purchase already in progress")
+            return
+        }
+
+        guard paywall != nil || tokenPaywall != nil else {
+            logger.error("PurchaseManager: Cannot purchase - paywalls not loaded")
+            let errorMsg = "Products are not loaded. Please try again."
+            purchaseError = errorMsg
+            completion(false, errorMsg)
+            return
+        }
+
+        guard allAvailableProducts.contains(where: { $0.id == product.id }) else {
+            logger.error("PurchaseManager: Product \(product.id) not found in available products")
+            let errorMsg = "Selected product is not available"
+            purchaseError = errorMsg
+            completion(false, errorMsg)
+            return
+        }
+
+        logger.info("PurchaseManager: Starting purchase for product \(product.id)")
+        purchaseState = .purchasing
+        purchaseError = nil
+
+        Task { @MainActor in
+            let result = await billingProvider.purchase(product: product)
+            await refreshSubscriptionStatusFromProvider()
+
+            if result.success {
+                logger.info("PurchaseManager: Purchase successful for product \(product.id)")
+                if product.kind != .subscription,
+                   product.sourceProduct is StoreKit.Product,
+                   let purchasedTokens = tokenAmount(from: product.id) {
+                    availableGenerations = max(0, availableGenerations) + purchasedTokens
+                    logger.info(
+                        "PurchaseManager: Applied local StoreKit token credit \(purchasedTokens) for product \(product.id)"
+                    )
+                }
+                #if DEBUG
+                await performDebugSubscriptionTopUpAfterPurchaseIfNeeded(product: product)
+                #endif
+                await syncBalanceFromBackendIfPossible(reason: "purchase_success_\(product.id)")
+                self.purchaseState = .ready
+                self.purchaseError = nil
+                self.isShowedPaywall = !self.isSubscribed && self.isOnboardingFinished
+                completion(true, nil)
+            } else {
+                logger.error("PurchaseManager: Purchase failed for product \(product.id)")
+                let errorMsg = result.errorMessage ?? "Purchase was not completed. Please try again."
+                self.purchaseState = .ready
+                self.purchaseError = errorMsg
+                completion(false, errorMsg)
+            }
+        }
+    }
+
+    func restorePurchase(completion: @escaping(Bool) -> Void) {
+        logger.info("PurchaseManager: Starting restore purchases")
+        Task { @MainActor in
+            let result = await billingProvider.restorePurchases()
+            await refreshSubscriptionStatusFromProvider()
+            await syncBalanceFromBackendIfPossible(reason: "restore")
+
+            if result.hasActiveSubscription {
+                self.logger.info("PurchaseManager: Restore successful - active subscription found")
+                self.failRestoreText = nil
+                completion(true)
+                return
+            }
+
+            self.logger.warning("PurchaseManager: Nothing to restore")
+            self.failRestoreText = result.errorMessage ?? "Nothing to restore"
+            completion(false)
+        }
+    }
+
+    func restoreAny() async -> Bool {
+        await withCheckedContinuation { continuation in
+            restorePurchase { success in
+                continuation.resume(returning: success)
+            }
+        }
+    }
+
+    func refreshSubscriptionStatusFromProvider() async {
+        let hasAccess = await billingProvider.hasPremiumAccess()
+        self.isSubscribed = hasAccess
+        self.activeSubscriptionPlanTitle = await resolvedActiveSubscriptionPlanTitle(
+            hasAccess: hasAccess
+        )
+    }
+
+    func updateAvailableGenerations(_ value: Int) {
+        availableGenerations = max(0, value)
+    }
+
+    func updateServicePrices(_ pricesData: ServicePricesData?) {
+        servicePricesByKey = pricesData?.pricesByKey ?? [:]
+        klingModelPrices = pricesData?.klingPrice ?? []
+    }
+
+    func trackCurrentPaywallShown(placementID: String? = nil) {
+        let resolvedPlacementID = placementID ?? BillingConfig.adaptyMainPlacementID
+        logger.info("PurchaseManager: Tracking paywall shown for placement \(resolvedPlacementID, privacy: .public)")
+        billingProvider.trackPaywallShown(paywallForPlacement(id: resolvedPlacementID))
+    }
+
+    func trackCurrentPaywallClosed(placementID: String? = nil) {
+        let resolvedPlacementID = placementID ?? BillingConfig.adaptyMainPlacementID
+        logger.info("PurchaseManager: Tracking paywall closed for placement \(resolvedPlacementID, privacy: .public)")
+        billingProvider.trackPaywallClosed(paywallForPlacement(id: resolvedPlacementID))
+    }
+
+    func debugLogTokenPaywallState(context: String) {
+        let tokenPaywallID = self.tokenPaywall?.id ?? "nil"
+        let tokenProductsDescription = self.productDebugDescription(self.tokenProducts)
+        let tokenPurchaseErrorText = self.tokenPurchaseError ?? "nil"
+        let isTokensReady = self.isTokensReady
+
+        logger.info(
+            "PurchaseManager[\(context, privacy: .public)]: tokenPaywall=\(tokenPaywallID, privacy: .public), tokenProducts=\(tokenProductsDescription, privacy: .public), tokenPurchaseError=\(tokenPurchaseErrorText, privacy: .public), isTokensReady=\(isTokensReady)"
+        )
+    }
+}
+
+private extension PurchaseManager {
+    var allAvailableProducts: [BillingProduct] {
+        products + tokenProducts
+    }
+
+    func paywallForPlacement(id: String) -> BillingPaywall? {
+        if id == BillingConfig.adaptyTokensPlacementID {
+            return tokenPaywall
+        }
+        if id == BillingConfig.adaptyMainPlacementID {
+            return paywall
+        }
+        return paywall
+    }
+
+    func resolvedActiveSubscriptionPlanTitle(hasAccess: Bool) async -> String? {
+        guard hasAccess else { return nil }
+
+        do {
+            let profile = try await Adapty.getProfile()
+            let key = BillingConfig.adaptyAccessLevelKey
+
+            guard let accessLevel = profile.accessLevels[key], accessLevel.isActive else {
+                return "Premium Plan"
+            }
+
+            return displayPlanTitle(for: accessLevel.vendorProductId)
+        } catch {
+            return activeSubscriptionPlanTitle ?? "Premium Plan"
+        }
+    }
+
+    func displayPlanTitle(for productID: String) -> String {
+        let normalizedID = productID.lowercased()
+
+        if normalizedID.contains("year") || normalizedID.contains("annual") {
+            return "Yearly Plan"
+        }
+
+        if normalizedID.contains("month") {
+            return "Monthly Plan"
+        }
+
+        if normalizedID.contains("week") {
+            return "Weekly Plan"
+        }
+
+        return "Premium Plan"
+    }
+
+    func paywallDebugDescription(_ paywalls: [BillingPaywall]) -> String {
+        guard !paywalls.isEmpty else { return "[]" }
+        let items = paywalls.map { paywall in
+            "\(paywall.id){\(productDebugDescription(paywall.products))}"
+        }
+        return "[\(items.joined(separator: ", "))]"
+    }
+
+    func productDebugDescription(_ products: [BillingProduct]) -> String {
+        guard !products.isEmpty else { return "[]" }
+        let items = products.map { product in
+            "\(product.id)=\(product.localizedPrice)"
+        }
+        return "[\(items.joined(separator: ", "))]"
+    }
+
+    func syncBalanceFromBackendIfPossible(reason: String) async {
+        let resolvedUserID = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !resolvedUserID.isEmpty else {
+            logger.warning(
+                "PurchaseManager: Skipping backend balance sync for \(reason, privacy: .public) because userId is empty"
+            )
+            return
+        }
+
+        do {
+            let auth = try await backendService.authorize(userId: resolvedUserID, gender: "m")
+            updateAvailableGenerations(auth.availableGenerations)
+            logger.info(
+                "PurchaseManager: Backend auth sync completed for \(reason, privacy: .public). availableGenerations=\(auth.availableGenerations)"
+            )
+        } catch {
+            logger.warning(
+                "PurchaseManager: Backend auth sync failed for \(reason, privacy: .public) - \(error.localizedDescription, privacy: .public)"
+            )
+        }
+
+        do {
+            let profile = try await backendService.fetchProfile(userId: resolvedUserID)
+            updateAvailableGenerations(profile.availableGenerations)
+            logger.info(
+                "PurchaseManager: Backend profile sync completed for \(reason, privacy: .public). availableGenerations=\(profile.availableGenerations)"
+            )
+        } catch {
+            logger.error(
+                "PurchaseManager: Backend profile sync failed for \(reason, privacy: .public) - \(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    #if DEBUG
+    func performDebugSubscriptionTopUpAfterPurchaseIfNeeded(product: BillingProduct) async {
+        guard product.kind == .subscription else { return }
+
+        let resolvedUserID = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !resolvedUserID.isEmpty else {
+            logger.warning("PurchaseManager: Debug subscription top-up skipped because userId is empty")
+            return
+        }
+
+        do {
+            let auth = try await backendService.authorize(userId: resolvedUserID, gender: "m")
+            updateAvailableGenerations(auth.availableGenerations)
+        } catch {
+            logger.warning(
+                "PurchaseManager: Debug top-up login failed for \(product.id, privacy: .public) - \(error.localizedDescription, privacy: .public)"
+            )
+        }
+
+        do {
+            try await backendService.setFreeGenerations(userId: resolvedUserID)
+        } catch {
+            logger.warning(
+                "PurchaseManager: Debug top-up setFreeGenerations failed for \(product.id, privacy: .public) - \(error.localizedDescription, privacy: .public)"
+            )
+        }
+
+        var tariffID: Int?
+
+        do {
+            let auth = try await backendService.authorize(userId: resolvedUserID, gender: "m")
+            updateAvailableGenerations(auth.availableGenerations)
+            tariffID = auth.statTariffId
+        } catch {
+            logger.warning(
+                "PurchaseManager: Debug top-up post-setFree login failed for \(product.id, privacy: .public) - \(error.localizedDescription, privacy: .public)"
+            )
+        }
+
+        if tariffID == nil || tariffID == 0 {
+            do {
+                let profile = try await backendService.fetchProfile(userId: resolvedUserID)
+                updateAvailableGenerations(profile.availableGenerations)
+                tariffID = profile.statTariffId
+            } catch {
+                logger.warning(
+                    "PurchaseManager: Debug top-up profile fetch failed for \(product.id, privacy: .public) - \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+
+        guard let resolvedTariffID = tariffID, resolvedTariffID > 0 else {
+            logger.warning(
+                "PurchaseManager: Debug top-up skipped addGenerations for \(product.id, privacy: .public) because tariffId is missing"
+            )
+            return
+        }
+
+        for attempt in 1...7 {
+            guard !Task.isCancelled else { return }
+
+            do {
+                try await backendService.addGenerations(userId: resolvedUserID, productId: resolvedTariffID)
+            } catch {
+                logger.warning(
+                    "PurchaseManager: Debug top-up addGenerations attempt \(attempt) failed for \(product.id, privacy: .public) - \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+    }
+    #endif
+
+    func tokenAmount(from productID: String) -> Int? {
+        let parts = productID.split { !$0.isNumber }
+        guard let firstNumericChunk = parts.first else {
+            return nil
+        }
+        return Int(firstNumericChunk)
+    }
+}
+
+extension PurchaseManager {
+    enum GenerationPriceMode: Hashable {
+        case template
+        case generate(GenerateType)
+    }
+
+    private var generationModeToPriceKey: [GenerationPriceMode: String] {
+        [
+            .template: "effect",
+            .generate(.textToPhoto): "txt2img",
+            .generate(.editPhoto): "tools",
+            .generate(.animatePhoto): "animation"
+        ]
+    }
+
+    var generationPriceByMode: [GenerationPriceMode: Int] {
+        var result: [GenerationPriceMode: Int] = [:]
+        for (mode, key) in generationModeToPriceKey {
+            result[mode] = servicePricesByKey[key] ?? 0
+        }
+        return result
+    }
+
+    var templateGenerationPrice: Int {
+        generationPriceByMode[.template] ?? 0
+    }
+
+    func generationPrice(for type: GenerateType) -> Int {
+        generationPriceByMode[.generate(type)] ?? 0
+    }
+}
+
+private extension PurchaseManager {
+    static func makeBackendService() -> MiniMaxBackendService {
+        MiniMaxBackendServiceImpl(
+            config: APIConfig(
+                baseURL: URL(string: MiniMaxBackendDefaults.baseURLString)!,
+                bearerToken: MiniMaxBackendDefaults.bearerToken
+            ),
+            http: URLSessionHTTPClient()
+        )
+    }
+}
