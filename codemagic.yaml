@@ -1,6 +1,6 @@
 workflows:
   ios-5080-release:
-    name: 5080
+    name: 5080appv2
     max_build_duration: 120
     instance_type: mac_mini_m1
 
