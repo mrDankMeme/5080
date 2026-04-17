@@ -91,6 +91,6 @@ private extension RateUsViewModel {
             return bundleName
         }
 
-        return "Base44"
+        return "Zentium Labs"
     }
 }

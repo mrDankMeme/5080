@@ -320,7 +320,7 @@ final class RootSettingsSceneViewModel: ObservableObject {
             ?? ((bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines))
                 .flatMap { $0.isEmpty ? nil : $0 }
-            ?? "Base44"
+            ?? "Zentium Labs"
 
         return "I'm using \(appName) to build apps and websites with AI. \(appStoreURL.absoluteString)"
     }

@@ -46,10 +46,11 @@ private extension Base44HomeSceneView {
                 Base44LogoMarkView()
                     .frame(width: 25.6.scale, height: 25.6.scale)
 
-                Text("Base44")
+                Text("Zentium Labs")
                     .font(Tokens.Font.bold32)
                     .foregroundStyle(Tokens.Color.base44BrandOrange)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.72)
             }
 
             Spacer(minLength: 12.scale)

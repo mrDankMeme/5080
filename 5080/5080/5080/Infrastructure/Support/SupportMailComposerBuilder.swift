@@ -16,9 +16,9 @@ enum SupportMailContext {
     var subject: String {
         switch self {
         case .support:
-            return "Base44 Support"
+            return "Zentium Labs Support"
         case .rateUsMaybeLater:
-            return "Base44 Feedback"
+            return "Zentium Labs Feedback"
         }
     }
 
@@ -124,7 +124,7 @@ private extension DefaultSupportMailComposerBuilder {
             return bundleName
         }
 
-        return "Base44"
+        return "Zentium Labs"
     }
 
     func resolvedVersion() -> String {

@@ -167,7 +167,7 @@ final class RootHomeSceneViewModel: ObservableObject {
 
 private extension RootHomeSceneViewModel {
     static func resolveAppTitle() -> String {
-        return "Base44"
+        return "Zentium Labs"
     }
 
     static func makeDefaultModeSections() -> [RootHomeModeSection] {
