@@ -320,9 +320,9 @@ final class RootSettingsSceneViewModel: ObservableObject {
             ?? ((bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines))
                 .flatMap { $0.isEmpty ? nil : $0 }
-            ?? "5080"
+            ?? "Base44"
 
-        return "I'm using \(appName) to create AI videos. \(appStoreURL.absoluteString)"
+        return "I'm using \(appName) to build apps and websites with AI. \(appStoreURL.absoluteString)"
     }
 
     private var premiumRowTitle: String {

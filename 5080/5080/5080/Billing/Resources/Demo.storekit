@@ -25,7 +25,7 @@
           "locale" : "en_US"
         }
       ],
-      "productID" : "100_Tokens_9.99",
+      "productID" : "100_tokens_9.99",
       "referenceName" : "100 Tokens 9.99",
       "type" : "Consumable"
     },
@@ -40,7 +40,7 @@
           "locale" : "en_US"
         }
       ],
-      "productID" : "250_Tokens_19.99",
+      "productID" : "250_tokens_19.99",
       "referenceName" : "250 Tokens 19.99",
       "type" : "Consumable"
     },
@@ -55,7 +55,7 @@
           "locale" : "en_US"
         }
       ],
-      "productID" : "500_Tokens_34.99",
+      "productID" : "500_tokens_34.99",
       "referenceName" : "500 Tokens 34.99",
       "type" : "Consumable"
     },
@@ -70,7 +70,7 @@
           "locale" : "en_US"
         }
       ],
-      "productID" : "1000_Tokens_59.99",
+      "productID" : "1000_tokens_59.99",
       "referenceName" : "1000 Tokens 59.99",
       "type" : "Consumable"
     },
@@ -85,7 +85,7 @@
           "locale" : "en_US"
         }
       ],
-      "productID" : "2000_Tokens_99.99",
+      "productID" : "2000_tokens_99.99",
       "referenceName" : "2000 Tokens 99.99",
       "type" : "Consumable"
     }
@@ -166,7 +166,7 @@
               "locale" : "en_US"
             }
           ],
-          "productID" : "week_6.99_nottrial",
+          "productID" : "week_6.99_not_trial",
           "recurringSubscriptionPeriod" : "P1W",
           "referenceName" : "week 6.99",
           "subscriptionGroupID" : "9CC935E6",
@@ -194,7 +194,7 @@
               "locale" : "en_US"
             }
           ],
-          "productID" : "yearly_49.99_nottrial",
+          "productID" : "yearly_49.99_not_trial",
           "recurringSubscriptionPeriod" : "P1Y",
           "referenceName" : "yearly 49.99",
           "subscriptionGroupID" : "9CC935E6",

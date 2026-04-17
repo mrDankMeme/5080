@@ -2,11 +2,11 @@ import Foundation
 import UIKit
 
 enum AppExternalResources {
-    static let supportEmail = "dete8489@gmail.com"
-    static let privacyPolicyURL = URL(string: "https://docs.google.com/document/d/1gO4kMiaVCuHeIjBC43qAzLfIatpo-5kpNE8Uov5QAzQ/edit?usp=sharing")!
-    static let termsOfUseURL = URL(string: "https://docs.google.com/document/d/1FsCLwpFngqIQgQ1e-0m6RkgO2lhKrSYG3BDdk7BsMzA/edit?usp=sharing")!
-    static let supportFormURL = URL(string: "https://forms.gle/MyCr6wzsCAU4VSMY7")!
-    static let appStoreURL = URL(string: "https://apps.apple.com/us/app/veyl-ai-video-generator/id6760103981")!
+    static let supportEmail = "hassan_emily8936@aol.com"
+    static let privacyPolicyURL = URL(string: "https://docs.google.com/document/d/1mqOCStt88ABwKV-g1yvsl4MgnsFKFsth3px7Ryo9lGI/edit?usp=sharing")!
+    static let termsOfUseURL = URL(string: "https://docs.google.com/document/d/1d4KEY-DywWPa-tgIvnXgdh-VEAotZXfdojFCI9w-yPw/edit?usp=sharing")!
+    static let supportFormURL = URL(string: "https://forms.gle/gDvGDpUYDEwRW7RD7")!
+    static let appStoreURL = URL(string: "https://apps.apple.com/us/app/zentium-labs/id6762474175")!
 }
 
 enum SupportMailContext {
@@ -16,9 +16,9 @@ enum SupportMailContext {
     var subject: String {
         switch self {
         case .support:
-            return "5080 Support"
+            return "Base44 Support"
         case .rateUsMaybeLater:
-            return "5080 Feedback"
+            return "Base44 Feedback"
         }
     }
 
@@ -124,7 +124,7 @@ private extension DefaultSupportMailComposerBuilder {
             return bundleName
         }
 
-        return "5080"
+        return "Base44"
     }
 
     func resolvedVersion() -> String {

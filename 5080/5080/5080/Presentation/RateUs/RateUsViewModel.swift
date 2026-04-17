@@ -91,6 +91,6 @@ private extension RateUsViewModel {
             return bundleName
         }
 
-        return "5080"
+        return "Base44"
     }
 }

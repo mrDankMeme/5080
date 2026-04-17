@@ -167,7 +167,7 @@ final class RootHomeSceneViewModel: ObservableObject {
 
 private extension RootHomeSceneViewModel {
     static func resolveAppTitle() -> String {
-        return "Veyl: AI Generator"
+        return "Base44"
     }
 
     static func makeDefaultModeSections() -> [RootHomeModeSection] {

@@ -11,7 +11,7 @@ final class AdaptyBillingProvider: BillingProvider {
     }
 
     private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.nat.5043minimax",
+        subsystem: Bundle.main.bundleIdentifier ?? "com.arn.5080base44",
         category: "AdaptyBillingProvider"
     )
 
@@ -376,13 +376,16 @@ private extension AdaptyBillingProvider {
         paywallID: String,
         kind: BillingProductKind = .subscription
     ) -> BillingProduct {
-        BillingProduct(
+        let resolvedPeriod = resolvedBillingPeriod(from: product.subscriptionPeriod)
+
+        return BillingProduct(
             id: product.vendorProductId,
             paywallID: paywallID,
             kind: kind,
             price: product.price,
             localizedPrice: resolvedLocalizedPrice(from: product),
-            periodTitle: resolvedPeriodTitle(from: product.vendorProductId),
+            period: resolvedPeriod,
+            periodTitle: resolvedPeriodTitle(from: resolvedPeriod, fallbackProductID: product.vendorProductId),
             currencyCode: product.currencyCode,
             priceRegionCode: product.regionCode,
             isTrial: false,
@@ -395,13 +398,16 @@ private extension AdaptyBillingProvider {
         paywallID: String,
         kind: BillingProductKind = .unknown
     ) -> BillingProduct {
-        BillingProduct(
+        let resolvedPeriod = resolvedBillingPeriod(from: product.subscription?.subscriptionPeriod)
+
+        return BillingProduct(
             id: product.id,
             paywallID: paywallID,
             kind: kind,
             price: product.price,
             localizedPrice: product.displayPrice,
-            periodTitle: resolvedPeriodTitle(from: product.id),
+            period: resolvedPeriod,
+            periodTitle: resolvedPeriodTitle(from: resolvedPeriod, fallbackProductID: product.id),
             currencyCode: nil,
             priceRegionCode: nil,
             isTrial: false,
@@ -441,7 +447,70 @@ private extension AdaptyBillingProvider {
         return NSDecimalNumber(decimal: product.price).stringValue
     }
 
-    func resolvedPeriodTitle(from productID: String) -> String? {
+    func resolvedBillingPeriod(from period: AdaptySubscriptionPeriod?) -> BillingPeriod? {
+        guard let period else { return nil }
+
+        return BillingPeriod(
+            unit: resolvedBillingPeriodUnit(from: period.unit),
+            numberOfUnits: period.numberOfUnits
+        )
+    }
+
+    func resolvedBillingPeriod(from period: Product.SubscriptionPeriod?) -> BillingPeriod? {
+        guard let period else { return nil }
+
+        return BillingPeriod(
+            unit: resolvedBillingPeriodUnit(from: period.unit),
+            numberOfUnits: period.value
+        )
+    }
+
+    func resolvedBillingPeriodUnit(from unit: AdaptySubscriptionPeriod.Unit) -> BillingPeriodUnit {
+        switch unit {
+        case .day:
+            return .day
+        case .week:
+            return .week
+        case .month:
+            return .month
+        case .year:
+            return .year
+        case .unknown:
+            return .unknown
+        }
+    }
+
+    func resolvedBillingPeriodUnit(from unit: Product.SubscriptionPeriod.Unit) -> BillingPeriodUnit {
+        switch unit {
+        case .day:
+            return .day
+        case .week:
+            return .week
+        case .month:
+            return .month
+        case .year:
+            return .year
+        @unknown default:
+            return .unknown
+        }
+    }
+
+    func resolvedPeriodTitle(from period: BillingPeriod?, fallbackProductID productID: String) -> String? {
+        if let period {
+            switch period.unit {
+            case .day:
+                return "day"
+            case .week:
+                return "week"
+            case .month:
+                return "month"
+            case .year:
+                return "year"
+            case .unknown:
+                break
+            }
+        }
+
         let id = productID.lowercased()
         if id.contains("week") { return "week" }
         if id.contains("month") { return "month" }

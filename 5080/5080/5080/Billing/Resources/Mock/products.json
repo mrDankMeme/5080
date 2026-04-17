@@ -19,28 +19,28 @@
   },
   {
     "id": "c973db9c-39ad-4c51-96f9-cf89a4db68ff",
-    "apphud_id": "41",
+    "apphud_id": "250_tokens_19.99",
     "name": "250 tokens",
     "price": 1990,
     "is_subscription": false
   },
   {
     "id": "284adb46-feb4-48f5-a4b8-5f2e6034e719",
-    "apphud_id": "42",
+    "apphud_id": "500_tokens_34.99",
     "name": "500 tokens",
     "price": 3490,
     "is_subscription": false
   },
   {
     "id": "0e2b57e4-0a5d-4840-98b2-1ef435b32f06",
-    "apphud_id": "43",
+    "apphud_id": "1000_tokens_59.99",
     "name": "1000 tokens",
     "price": 5990,
     "is_subscription": false
   },
   {
     "id": "3104a76a-0554-421e-a3eb-3c2e1e7f4b4c",
-    "apphud_id": "39",
+    "apphud_id": "2000_tokens_99.99",
     "name": "2000 tokens",
     "price": 9990,
     "is_subscription": false
@@ -56,7 +56,7 @@
   },
   {
     "id": "b00a9f62-a837-4ac7-8e31-b2a0ea3a5462",
-    "apphud_id": "40",
+    "apphud_id": "100_tokens_9.99",
     "name": "100 tokens",
     "price": 990,
     "is_subscription": false
@@ -90,7 +90,7 @@
   },
   {
     "id": "f9ef169b-0928-4ddc-8905-47d1795f2dca",
-    "apphud_id": "week_6.99_nottrial",
+    "apphud_id": "week_6.99_not_trial",
     "name": "AIPhotoAppApi week",
     "price": 559,
     "is_subscription": true,
@@ -99,7 +99,7 @@
   },
   {
     "id": "c82b9dcd-eb6e-4d93-bbde-9f0c59a50431",
-    "apphud_id": "yearly_49.99_nottrial",
+    "apphud_id": "yearly_49.99_not_trial",
     "name": "AIPhotoAppApi yearly",
     "price": 3200,
     "is_subscription": true,

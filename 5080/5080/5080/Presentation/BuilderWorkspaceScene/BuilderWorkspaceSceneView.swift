@@ -128,7 +128,7 @@ private extension BuilderWorkspaceSceneView {
                         generateButton
                     }
                 }
-                .padding(.horizontal, 28.scale)
+                .padding(.horizontal, 16.scale)
                 .padding(.bottom, 24.scale)
             }
 
@@ -191,55 +191,64 @@ private extension BuilderWorkspaceSceneView {
     }
 
     var promptBubble: some View {
-        Text(viewModel.promptText)
-            .font(Tokens.Font.medium18)
-            .foregroundStyle(Tokens.Color.surfaceWhite)
-            .lineSpacing(5.scale)
-            .padding(.horizontal, 18.scale)
-            .padding(.vertical, 16.scale)
-            .background(Tokens.Color.base44BrandOrange)
-            .clipShape(RoundedRectangle(cornerRadius: 22.scale, style: .continuous))
-            .padding(.horizontal, 34.scale)
-            .padding(.bottom, 4.scale)
+        HStack(spacing: 0.scale) {
+            Spacer(minLength: 52.scale)
+
+            Text(viewModel.promptText)
+                .font(Tokens.Font.regular16)
+                .foregroundStyle(Tokens.Color.surfaceWhite)
+                .lineSpacing(4.scale)
+                .padding(.horizontal, 18.scale)
+                .padding(.vertical, 16.scale)
+                .background(Tokens.Color.base44BrandOrange)
+                .clipShape(RoundedRectangle(cornerRadius: 22.scale, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.bottom, 4.scale)
     }
 
     func questionCard(_ question: BuilderQuestionItem) -> some View {
-        VStack(alignment: .leading, spacing: 14.scale) {
-            Text(question.title)
-                .font(Tokens.Font.bold18)
-                .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.82))
-
+        HStack(spacing: 0.scale) {
             VStack(alignment: .leading, spacing: 14.scale) {
-                ForEach(Array(question.options.enumerated()), id: \.offset) { index, option in
-                    Button {
-                        viewModel.updateSelection(
-                            questionID: question.id,
-                            selectedIndex: index
-                        )
-                    } label: {
-                        HStack(alignment: .top, spacing: 12.scale) {
-                            selectionIndicator(
-                                isSelected: question.selectedIndex == index
-                            )
-                            .padding(.top, 2.scale)
+                Text(question.title)
+                    .font(Tokens.Font.semibold18)
+                    .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.82))
 
-                            Text(option)
-                                .font(Tokens.Font.medium17)
-                                .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.78))
-                                .multilineTextAlignment(.leading)
+                VStack(alignment: .leading, spacing: 14.scale) {
+                    ForEach(Array(question.options.enumerated()), id: \.offset) { index, option in
+                        Button {
+                            viewModel.updateSelection(
+                                questionID: question.id,
+                                selectedIndex: index
+                            )
+                        } label: {
+                            HStack(alignment: .top, spacing: 12.scale) {
+                                selectionIndicator(
+                                    isSelected: question.selectedIndex == index
+                                )
+                                .padding(.top, 2.scale)
+
+                                Text(option)
+                                    .font(Tokens.Font.regular16)
+                                    .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.78))
+                                    .multilineTextAlignment(.leading)
+                            }
                         }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
+            .padding(18.scale)
+            .background(Tokens.Color.base44SoftCard.opacity(0.97))
+            .clipShape(RoundedRectangle(cornerRadius: 20.scale, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20.scale, style: .continuous)
+                    .stroke(Tokens.Color.base44Border, lineWidth: 1.scale)
+            }
+
+            Spacer(minLength: 52.scale)
         }
-        .padding(18.scale)
-        .background(Tokens.Color.base44SoftCard.opacity(0.97))
-        .clipShape(RoundedRectangle(cornerRadius: 20.scale, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 20.scale, style: .continuous)
-                .stroke(Tokens.Color.base44Border, lineWidth: 1.scale)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     func selectionIndicator(isSelected: Bool) -> some View {

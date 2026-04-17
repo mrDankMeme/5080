@@ -16,7 +16,7 @@ struct RootSettingsSceneView: View {
 
                 Text(viewModel.applicationVersionText)
                     .font(Tokens.Font.regular13)
-                    .foregroundStyle(Tokens.Color.textSecondary)
+                    .foregroundStyle(Tokens.Color.base44BrandOrange.opacity(0.46))
                     .kerning(-0.13.scale)
                     .frame(maxWidth: .infinity)
                     .multilineTextAlignment(.center)
@@ -30,9 +30,9 @@ struct RootSettingsSceneView: View {
                 .padding(.horizontal, 16.scale)
                 .padding(.top, 16.scale)
                 .padding(.bottom, 8.scale)
-                .background(Tokens.Color.surfaceWhite)
+                .background(headerBackground)
         }
-        .background(Tokens.Color.surfaceWhite.ignoresSafeArea())
+        .background(screenBackground.ignoresSafeArea())
         .sheet(
             item: Binding(
                 get: { viewModel.presentedWebDestination },
@@ -133,6 +133,28 @@ struct RootSettingsSceneView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var screenBackground: some View {
+        LinearGradient(
+            colors: [
+                Tokens.Color.surfaceWhite,
+                Tokens.Color.base44WarmCream.opacity(0.96)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    private var headerBackground: some View {
+        LinearGradient(
+            colors: [
+                Tokens.Color.surfaceWhite,
+                Tokens.Color.base44WarmCream.opacity(0.72)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
     private func sectionView(_ section: RootSettingsSceneViewModel.SectionModel) -> some View {
         VStack(spacing: 8.scale) {
             ForEach(section.rows) { row in
@@ -175,8 +197,18 @@ struct RootSettingsSceneView: View {
         }
         .padding(.horizontal, 16.scale)
         .frame(height: 52.scale)
-        .background(backgroundColor(for: row.style))
+        .background(rowBackground(for: row.style))
         .clipShape(RoundedRectangle(cornerRadius: 16.scale, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16.scale, style: .continuous)
+                .stroke(rowBorderColor(for: row.style), lineWidth: 1.scale)
+        }
+        .shadow(
+            color: rowShadowColor(for: row.style),
+            radius: 14.scale,
+            x: 0.scale,
+            y: 6.scale
+        )
     }
 
     @ViewBuilder
@@ -197,12 +229,26 @@ struct RootSettingsSceneView: View {
         }
     }
 
-    private func backgroundColor(for style: RootSettingsSceneViewModel.RowStyle) -> Color {
+    private func rowBackground(for style: RootSettingsSceneViewModel.RowStyle) -> some View {
         switch style {
         case .accent:
-            return Tokens.Color.accent
+            return LinearGradient(
+                colors: [
+                    Tokens.Color.base44BrandOrange,
+                    Tokens.Color.base44BrandOrange.opacity(0.82)
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
         case .neutral:
-            return Tokens.Color.cardSoftBackground
+            return LinearGradient(
+                colors: [
+                    Tokens.Color.base44SoftCard,
+                    Tokens.Color.surfaceWhite
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
         }
     }
 
@@ -211,7 +257,7 @@ struct RootSettingsSceneView: View {
         case .accent:
             return Tokens.Color.surfaceWhite
         case .neutral:
-            return Tokens.Color.accent
+            return Tokens.Color.base44BrandOrange
         }
     }
 
@@ -229,7 +275,25 @@ struct RootSettingsSceneView: View {
         case .accent:
             return Tokens.Color.surfaceWhite
         case .neutral:
-            return Tokens.Color.inkPrimary30
+            return Tokens.Color.base44BrandOrange.opacity(0.34)
+        }
+    }
+
+    private func rowBorderColor(for style: RootSettingsSceneViewModel.RowStyle) -> Color {
+        switch style {
+        case .accent:
+            return Tokens.Color.surfaceWhite.opacity(0.10)
+        case .neutral:
+            return Tokens.Color.base44Border
+        }
+    }
+
+    private func rowShadowColor(for style: RootSettingsSceneViewModel.RowStyle) -> Color {
+        switch style {
+        case .accent:
+            return Tokens.Color.base44BrandOrange.opacity(0.18)
+        case .neutral:
+            return Tokens.Color.base44BrandOrange.opacity(0.08)
         }
     }
 }
@@ -253,15 +317,15 @@ private struct SettingsPushToggle: View {
 
     private var trackColor: Color {
         if isOn {
-            return Tokens.Color.accent.opacity(0.20)
+            return Tokens.Color.base44BrandOrange.opacity(0.24)
         }
-        return Color(hex: "EEEEEE") ?? Tokens.Color.cardSoftBackground
+        return Tokens.Color.base44WarmCream
     }
 
     private var knobColor: Color {
         if isOn {
-            return Tokens.Color.accent
+            return Tokens.Color.base44BrandOrange
         }
-        return Color(hex: "D8D8D8") ?? Tokens.Color.inkPrimary30
+        return Tokens.Color.base44BrandOrange.opacity(0.28)
     }
 }

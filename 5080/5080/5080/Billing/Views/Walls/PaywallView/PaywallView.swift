@@ -31,6 +31,10 @@ struct PaywallView: View {
         AppExternalResources.privacyPolicyURL
     }
 
+    private var weeklyProductForComparison: BillingProduct? {
+        productsForLayout.first(where: isWeeklyProduct)
+    }
+
     private var productsForLayout: [BillingProduct] {
         let all = purchaseManager.products
         guard !all.isEmpty else { return [] }
@@ -234,7 +238,11 @@ struct PaywallView: View {
                 product.localizedPrice
             },
             planBadgeText: { product in
-                isAnnualProduct(product) ? "SAVE 40%" : nil
+                guard isAnnualProduct(product) else { return nil }
+                return PaywallProductText.savingsBadgeText(
+                    for: product,
+                    comparedTo: weeklyProductForComparison
+                )
             },
             bottomSafeInset: safeBottom
         )

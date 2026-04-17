@@ -54,7 +54,7 @@ struct RateUsView: View {
                             .kerning(-0.16.scale)
                             .frame(maxWidth: .infinity)
                             .frame(height: 56.scale)
-                            .background(Tokens.Color.accent)
+                            .background(Tokens.Color.base44BrandOrange)
                             .clipShape(RoundedRectangle(cornerRadius: 18.scale, style: .continuous))
                     }
                     .buttonStyle(.plain)

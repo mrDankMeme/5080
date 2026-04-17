@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 final class Analytics {
     static let shared = Analytics()
 
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.nat.5043minimax", category: "analytics")
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.arn.5080base44", category: "analytics")
 
     private init() {}
 

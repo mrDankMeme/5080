@@ -9,7 +9,7 @@ final class PurchaseManager: ObservableObject {
     private let billingProvider: BillingProvider = AdaptyBillingProvider()
     private let backendService: MiniMaxBackendService = PurchaseManager.makeBackendService()
 
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.nat.5043minimax", category: "PurchaseManager")
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.arn.5080base44", category: "PurchaseManager")
 
     enum PurchaseState: Equatable {
         case idle
