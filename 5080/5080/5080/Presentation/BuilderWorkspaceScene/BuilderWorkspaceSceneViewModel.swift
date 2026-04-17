@@ -21,6 +21,7 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
     @Published private(set) var detailLine = "Clarify questions will appear here."
     @Published private(set) var latestStreamText = "No stream yet."
     @Published private(set) var isBusy = false
+    @Published private(set) var isBackNavigationLocked = true
 
     private let launch: BuilderSceneLaunch
     private let createProjectUseCase: CreateSiteMakerProjectUseCaseProtocol
@@ -64,6 +65,10 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
 
     var canGenerate: Bool {
         !isBusy && hasQuestions && !briefDescription.isEmpty
+    }
+
+    var canDismiss: Bool {
+        !isBackNavigationLocked
     }
 
     var composerPlaceholder: String {
@@ -130,6 +135,7 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
             }
 
             isBusy = true
+            isBackNavigationLocked = true
             statusLine = "Generating site..."
             detailLine = "Spec, code, files, and build events will stream from the backend."
             latestStreamText = "Waiting for spec stream..."
@@ -202,9 +208,11 @@ private extension BuilderWorkspaceSceneViewModel {
         if previewURL != nil {
             statusLine = "Project loaded."
             detailLine = project.previewURLString ?? "Preview is ready."
+            isBackNavigationLocked = false
         } else {
             statusLine = "Draft loaded."
             detailLine = "Continue in chat and generate when you're ready."
+            isBackNavigationLocked = true
         }
 
         latestStreamText = project.name
@@ -477,6 +485,7 @@ private extension BuilderWorkspaceSceneViewModel {
             statusLine = buildSuccessLine
             detailLine = outcome.previewURLString
             latestStreamText = outcome.outputPath
+            isBackNavigationLocked = false
 
         case .message(_, let value):
             latestStreamText = value

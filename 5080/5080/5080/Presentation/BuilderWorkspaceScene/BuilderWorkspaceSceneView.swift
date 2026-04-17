@@ -82,17 +82,27 @@ private extension BuilderWorkspaceSceneView {
                 dismiss()
             } label: {
                 Circle()
-                    .fill(Tokens.Color.surfaceWhite.opacity(0.94))
+                    .fill(
+                        Tokens.Color.surfaceWhite.opacity(
+                            viewModel.canDismiss ? 0.94 : 0.62
+                        )
+                    )
                     .frame(width: 42.scale, height: 42.scale)
                     .overlay {
                         Image(systemName: "chevron.left")
                             .resizable()
                             .scaledToFit()
                             .frame(width: 11.scale, height: 18.scale)
-                            .foregroundStyle(Tokens.Color.inkPrimary)
+                            .foregroundStyle(
+                                Tokens.Color.inkPrimary.opacity(
+                                    viewModel.canDismiss ? 1.0 : 0.34
+                                )
+                            )
                     }
             }
             .buttonStyle(.plain)
+            .disabled(!viewModel.canDismiss)
+            .opacity(viewModel.canDismiss ? 1.0 : 0.72)
 
             Spacer(minLength: 16.scale)
 

@@ -51,6 +51,14 @@ struct SiteMakerProjectSummary: Identifiable, Hashable, Sendable {
     let updatedAt: String
 }
 
+struct SiteMakerCurrentUser: Sendable {
+    let id: String
+    let email: String
+    let displayName: String?
+    let credits: Int
+    let createdAt: String
+}
+
 struct SiteMakerProject: Identifiable, Sendable {
     let id: String
     let userID: String

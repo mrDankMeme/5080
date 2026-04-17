@@ -232,6 +232,13 @@ final class ServicesAssembly: Assembly {
         }
         .inObjectScope(.container)
 
+        container.register(FetchSiteMakerCurrentUserUseCaseProtocol.self) { r in
+            DefaultFetchSiteMakerCurrentUserUseCase(
+                repository: r.resolve(SiteMakerRepositoryProtocol.self)!
+            )
+        }
+        .inObjectScope(.transient)
+
         container.register(FetchSiteMakerProjectsUseCaseProtocol.self) { r in
             DefaultFetchSiteMakerProjectsUseCase(
                 repository: r.resolve(SiteMakerRepositoryProtocol.self)!
@@ -300,10 +307,6 @@ final class ServicesAssembly: Assembly {
 
         container.register(AppFlowViewModel.self) { r in
             AppFlowViewModel(
-                authorizeUserUseCase: r.resolve(AuthorizeUserUseCase.self)!,
-                setFreeGenerationsUseCase: r.resolve(SetFreeGenerationsUseCase.self)!,
-                addGenerationsUseCase: r.resolve(AddGenerationsUseCase.self)!,
-                fetchProfileUseCase: r.resolve(FetchProfileUseCase.self)!,
                 purchaseManager: r.resolve(PurchaseManager.self)!
             )
         }
@@ -610,7 +613,9 @@ final class ServicesAssembly: Assembly {
 
         container.register(Base44HomeSceneViewModel.self) { r in
             Base44HomeSceneViewModel(
-                fetchProjectsUseCase: r.resolve(FetchSiteMakerProjectsUseCaseProtocol.self)!
+                fetchProjectsUseCase: r.resolve(FetchSiteMakerProjectsUseCaseProtocol.self)!,
+                fetchCurrentUserUseCase: r.resolve(FetchSiteMakerCurrentUserUseCaseProtocol.self)!,
+                purchaseManager: r.resolve(PurchaseManager.self)!
             )
         }
         .inObjectScope(.container)

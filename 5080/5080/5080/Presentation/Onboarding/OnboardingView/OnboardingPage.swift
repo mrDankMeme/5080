@@ -147,7 +147,7 @@ private extension DefaultOnboardingContentProvider {
                 imageTopOffset: 0.scale,
                 scale: .init(x: 1, y: 1),
                 title: "Build Websites & Apps in Seconds",
-                subtitle: "Turn your ideas into real products — no coding\nneeded"
+                subtitle: "Turn your ideas into real products — no coding needed"
             ),
             .init(
                 id: 1,
@@ -157,7 +157,7 @@ private extension DefaultOnboardingContentProvider {
                 imageTopOffset:  -30.scale,
                 scale: .init(x: 1, y: 1),
                 title: "AI Does the Hard Work",
-                subtitle: "Describe what you want, and get a ready-to-use\ndesign and structure instantly",
+                subtitle: "Describe what you want, and get a ready-to-use design and structure instantly",
                 requestsSystemReviewPrompt: true
             ),
             .init(
@@ -168,7 +168,7 @@ private extension DefaultOnboardingContentProvider {
                 imageTopOffset: -30.scale,
                 scale: .init(x: 1, y: 1),
                 title: "Launch Faster Than Ever",
-                subtitle: "Edit, customize, and publish your project in just a\nfew taps",
+                subtitle: "Edit, customize, and publish your project in just a few taps",
                 requestsNotificationPermission: true
             )
         ]

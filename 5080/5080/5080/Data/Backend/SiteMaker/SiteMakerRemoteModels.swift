@@ -1,5 +1,23 @@
 import Foundation
 
+struct SiteMakerCurrentUserResponse: Decodable {
+    let id: String
+    let email: String
+    let display_name: String?
+    let credits: Int
+    let created_at: String
+
+    func toDomain() -> SiteMakerCurrentUser {
+        SiteMakerCurrentUser(
+            id: id,
+            email: email,
+            displayName: display_name,
+            credits: credits,
+            createdAt: created_at
+        )
+    }
+}
+
 struct SiteMakerProjectSummaryResponse: Decodable {
     let id: String
     let name: String

@@ -1,6 +1,10 @@
 import Foundation
 
 protocol SiteMakerRemoteServicing {
+    func fetchCurrentUser(
+        baseURLString: String,
+        accessToken: String
+    ) async throws -> SiteMakerCurrentUser
     func listProjects(
         baseURLString: String,
         accessToken: String
@@ -52,6 +56,28 @@ final class SiteMakerRemoteService: SiteMakerRemoteServicing {
 
     init(session: URLSession = .shared) {
         self.session = session
+    }
+
+    func fetchCurrentUser(
+        baseURLString: String,
+        accessToken: String
+    ) async throws -> SiteMakerCurrentUser {
+        let response = try await performRequest(
+            baseURLString: baseURLString,
+            method: "GET",
+            path: "/api/auth/me",
+            authToken: accessToken
+        )
+
+        guard (200..<300).contains(response.statusCode) else {
+            throw backendError(from: response)
+        }
+
+        let currentUser = try decode(SiteMakerCurrentUserResponse.self, from: response.data).toDomain()
+        SiteMakerDebugLogger.logAuth(
+            "Loaded current user id=\(currentUser.id), credits=\(currentUser.credits), email=\(currentUser.email)"
+        )
+        return currentUser
     }
 
     func listProjects(
@@ -369,6 +395,8 @@ private extension SiteMakerRemoteService {
             request.httpBody = rawBody
         }
 
+        SiteMakerDebugLogger.logRequest(request)
+
         let data: Data
         let response: URLResponse
 
@@ -381,6 +409,12 @@ private extension SiteMakerRemoteService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw SiteMakerAuthorizationError.invalidResponse
         }
+
+        SiteMakerDebugLogger.logResponse(
+            url: request.url,
+            statusCode: httpResponse.statusCode,
+            data: data
+        )
 
         return (httpResponse.statusCode, data)
     }

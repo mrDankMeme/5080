@@ -19,7 +19,9 @@ struct RootTabView: View {
                 viewModel.openPro()
             },
             onTapCreate: {
-                viewModel.openCreate()
+                Task {
+                    await viewModel.openCreate()
+                }
             },
             onTapProject: { project in
                 viewModel.openProject(project)
@@ -68,7 +70,11 @@ struct RootTabView: View {
                     viewModel.dismissSubscriptionPaywall()
                 }
             }
-        )) {
+        ), onDismiss: {
+            Task {
+                await viewModel.refreshProjects()
+            }
+        }) {
             PaywallView {
                 viewModel.dismissSubscriptionPaywall()
             }
@@ -81,7 +87,11 @@ struct RootTabView: View {
                     viewModel.dismissTokensPaywall()
                 }
             }
-        )) {
+        ), onDismiss: {
+            Task {
+                await viewModel.refreshProjects()
+            }
+        }) {
             TokensPaywallView {
                 viewModel.dismissTokensPaywall()
             }

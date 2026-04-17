@@ -1,6 +1,7 @@
 import Foundation
 
 protocol SiteMakerRepositoryProtocol {
+    func fetchCurrentUser() async throws -> SiteMakerCurrentUser
     func listProjects() async throws -> [SiteMakerProjectSummary]
     func createProject(prompt: String) async throws -> SiteMakerProject
     func fetchProject(id: String) async throws -> SiteMakerProject

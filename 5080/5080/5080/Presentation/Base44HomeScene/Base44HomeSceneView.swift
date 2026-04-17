@@ -68,8 +68,10 @@ private extension Base44HomeSceneView {
                         .scaledToFit()
                         .frame(width: 13.scale, height: 13.scale)
 
-                    Text("PRO")
+                    Text(viewModel.headerBadgeTitle)
                         .font(Tokens.Font.bold15)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
                 .foregroundStyle(Tokens.Color.surfaceWhite)
                 .padding(.horizontal, 14.scale)

@@ -1,5 +1,17 @@
 import Foundation
 
+protocol FetchSiteMakerCurrentUserUseCaseProtocol {
+    func execute() async throws -> SiteMakerCurrentUser
+}
+
+struct DefaultFetchSiteMakerCurrentUserUseCase: FetchSiteMakerCurrentUserUseCaseProtocol {
+    let repository: SiteMakerRepositoryProtocol
+
+    func execute() async throws -> SiteMakerCurrentUser {
+        try await repository.fetchCurrentUser()
+    }
+}
+
 protocol FetchSiteMakerProjectsUseCaseProtocol {
     func execute() async throws -> [SiteMakerProjectSummary]
 }

@@ -38,17 +38,24 @@ enum SiteMakerAuthorizationError: LocalizedError {
 
 final class SiteMakerAuthorizationProvider: SiteMakerAuthorizationProviding {
     private let session: URLSession
+    private let userDefaults: UserDefaults
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var storedSession: SiteMakerSession
 
-    init(session: URLSession = .shared) {
+    init(
+        session: URLSession = .shared,
+        userDefaults: UserDefaults = .standard
+    ) {
         self.session = session
+        self.userDefaults = userDefaults
         self.storedSession = SiteMakerSessionStore.load()
 
         if self.storedSession.baseURLString.trimmed.isEmpty {
             self.storedSession.baseURLString = SiteMakerConfiguration.baseURLString
         }
+
+        syncAnonymousUserIDWithSharedStoreIfNeeded()
     }
 
     func authorizedContext() async throws -> SiteMakerAuthorizedContext {
@@ -58,6 +65,10 @@ final class SiteMakerAuthorizationProvider: SiteMakerAuthorizationProviding {
         guard !accessToken.isEmpty else {
             throw SiteMakerAuthorizationError.missingAccessToken
         }
+
+        SiteMakerDebugLogger.logAuth(
+            "Authorized context ready. anonymousUserID=\(authenticatedSession.anonymousUserID)"
+        )
 
         return SiteMakerAuthorizedContext(
             baseURLString: authenticatedSession.baseURLString,
@@ -72,12 +83,14 @@ private extension SiteMakerAuthorizationProvider {
 
         if let accessToken = storedSession.accessToken.nilIfEmpty,
            await isAccessTokenValid(accessToken) {
+            SiteMakerDebugLogger.logAuth("Using existing access token for \(anonymousUserID).")
             return storedSession
         }
 
         if try await refreshTokensIfPossible(),
            let accessToken = storedSession.accessToken.nilIfEmpty,
            await isAccessTokenValid(accessToken) {
+            SiteMakerDebugLogger.logAuth("Using refreshed access token for \(anonymousUserID).")
             return storedSession
         }
 
@@ -92,8 +105,17 @@ private extension SiteMakerAuthorizationProvider {
                 path: "/api/auth/me",
                 authToken: accessToken
             )
-            return (200..<300).contains(response.statusCode)
+            let isValid = (200..<300).contains(response.statusCode)
+            if !isValid {
+                SiteMakerDebugLogger.logAuth(
+                    "Access token validation failed with status \(response.statusCode)."
+                )
+            }
+            return isValid
         } catch {
+            SiteMakerDebugLogger.logAuth(
+                "Access token validation transport error: \(error.localizedDescription)"
+            )
             return false
         }
     }
@@ -102,6 +124,8 @@ private extension SiteMakerAuthorizationProvider {
         let refreshToken = storedSession.refreshToken.trimmed
         guard !refreshToken.isEmpty else { return false }
 
+        SiteMakerDebugLogger.logAuth("Refreshing SiteMaker tokens.")
+
         let response = try await performRequest(
             method: "POST",
             path: "/api/auth/refresh",
@@ -109,11 +133,15 @@ private extension SiteMakerAuthorizationProvider {
         )
 
         guard (200..<300).contains(response.statusCode) else {
+            SiteMakerDebugLogger.logAuth(
+                "Refresh request failed with status \(response.statusCode)."
+            )
             return false
         }
 
         let tokens = try decode(SiteMakerTokenResponse.self, from: response.data)
         apply(tokens: tokens)
+        SiteMakerDebugLogger.logAuth("Refresh succeeded.")
         return true
     }
 
@@ -138,10 +166,16 @@ private extension SiteMakerAuthorizationProvider {
             storedSession.anonymousUserID = anonymousUserID
             storedSession.password = password
             apply(tokens: tokens)
+            SiteMakerDebugLogger.logAuth(
+                "Registered anonymous SiteMaker user \(anonymousUserID)."
+            )
             return
         }
 
         if registerResponse.statusCode == 409 {
+            SiteMakerDebugLogger.logAuth(
+                "Anonymous user \(anonymousUserID) already exists. Falling back to login."
+            )
             let loginPayload = SiteMakerLoginRequest(
                 email: email,
                 password: password
@@ -164,6 +198,9 @@ private extension SiteMakerAuthorizationProvider {
             storedSession.anonymousUserID = anonymousUserID
             storedSession.password = password
             apply(tokens: tokens)
+            SiteMakerDebugLogger.logAuth(
+                "Login succeeded for anonymous SiteMaker user \(anonymousUserID)."
+            )
             return
         }
 
@@ -174,14 +211,10 @@ private extension SiteMakerAuthorizationProvider {
     }
 
     func resolveAnonymousUserID() -> String {
-        if let stored = validatedAnonymousUserID(from: storedSession.anonymousUserID) {
-            return stored
-        }
-
-        let generated = UUID().uuidString.lowercased()
-        storedSession.anonymousUserID = generated
-        persistSession()
-        return generated
+        let resolvedUserID = AppUserIdentityConfiguration.resolvedUserID(userDefaults: userDefaults)
+        SiteMakerDebugLogger.logAuth("Resolved app userId=\(resolvedUserID)")
+        adoptSharedAnonymousUserIDIfNeeded(resolvedUserID)
+        return resolvedUserID
     }
 
     func anonymousEmail(for anonymousUserID: String) throws -> String {
@@ -246,6 +279,8 @@ private extension SiteMakerAuthorizationProvider {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
+        SiteMakerDebugLogger.logRequest(request)
+
         let data: Data
         let response: URLResponse
 
@@ -259,7 +294,37 @@ private extension SiteMakerAuthorizationProvider {
             throw SiteMakerAuthorizationError.invalidResponse
         }
 
+        SiteMakerDebugLogger.logResponse(
+            url: request.url,
+            statusCode: httpResponse.statusCode,
+            data: data
+        )
+
         return (httpResponse.statusCode, data)
+    }
+
+    func syncAnonymousUserIDWithSharedStoreIfNeeded() {
+        let resolvedUserID = AppUserIdentityConfiguration.resolvedUserID(userDefaults: userDefaults)
+        adoptSharedAnonymousUserIDIfNeeded(resolvedUserID)
+    }
+
+    func adoptSharedAnonymousUserIDIfNeeded(_ sharedAnonymousUserID: String) {
+        let currentStoredUserID = validatedAnonymousUserID(from: storedSession.anonymousUserID)
+        guard currentStoredUserID != sharedAnonymousUserID else {
+            if storedSession.anonymousUserID != sharedAnonymousUserID {
+                storedSession.anonymousUserID = sharedAnonymousUserID
+                persistSession()
+            }
+            return
+        }
+
+        SiteMakerDebugLogger.logAuth(
+            "Switching SiteMaker anonymous user from \(currentStoredUserID ?? "<empty>") to shared \(sharedAnonymousUserID)."
+        )
+        storedSession.anonymousUserID = sharedAnonymousUserID
+        storedSession.accessToken = ""
+        storedSession.refreshToken = ""
+        persistSession()
     }
 
     func makeURL(path: String, queryItems: [URLQueryItem]) throws -> URL {
@@ -369,4 +434,93 @@ private struct SiteMakerTokenResponse: Decodable {
 
 private struct SiteMakerAPIError: Decodable {
     let detail: String
+}
+
+enum SiteMakerDebugLogger {
+    static func logAuth(_ message: String) {
+        #if DEBUG
+        print("[5080API][Auth] \(message)")
+        #endif
+    }
+
+    static func logRequest(_ request: URLRequest) {
+        #if DEBUG
+        print("--------------------------------------------------")
+        print("[5080API][Request] \(request.httpMethod ?? "GET") \(request.url?.absoluteString ?? "<unknown>")")
+        print("[5080API][Request] headers: \(sanitizedHeaders(from: request))")
+        print("[5080API][Request] body: \(bodyDescription(from: request.httpBody))")
+        #endif
+    }
+
+    static func logResponse(
+        url: URL?,
+        statusCode: Int,
+        data: Data
+    ) {
+        #if DEBUG
+        print("[5080API][Response] \(statusCode) \(url?.absoluteString ?? "<unknown>")")
+        print("[5080API][Response] body: \(responseDescription(from: data))")
+        print("--------------------------------------------------")
+        #endif
+    }
+}
+
+private extension SiteMakerDebugLogger {
+    static func sanitizedHeaders(from request: URLRequest) -> [String: String] {
+        (request.allHTTPHeaderFields ?? [:]).reduce(into: [:]) { partialResult, element in
+            if element.key.caseInsensitiveCompare("Authorization") == .orderedSame {
+                partialResult[element.key] = maskAuthorizationValue(element.value)
+            } else {
+                partialResult[element.key] = element.value
+            }
+        }
+    }
+
+    static func maskAuthorizationValue(_ value: String) -> String {
+        guard value.hasPrefix("Bearer ") else {
+            return value
+        }
+
+        let token = String(value.dropFirst("Bearer ".count))
+        let maskedToken = maskToken(token)
+        return "Bearer \(maskedToken)"
+    }
+
+    static func maskToken(_ token: String) -> String {
+        guard token.count > 9 else {
+            return token
+        }
+
+        let prefix = token.prefix(6)
+        let suffix = token.suffix(4)
+        return "\(prefix)...\(suffix)"
+    }
+
+    static func bodyDescription(from data: Data?) -> String {
+        guard let data, !data.isEmpty else {
+            return "<empty>"
+        }
+
+        return responseDescription(from: data)
+    }
+
+    static func responseDescription(from data: Data) -> String {
+        guard !data.isEmpty else {
+            return "<empty>"
+        }
+
+        if
+            let object = try? JSONSerialization.jsonObject(with: data),
+            let formattedData = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]),
+            let formattedString = String(data: formattedData, encoding: .utf8)
+        {
+            return formattedString
+        }
+
+        if let stringValue = String(data: data, encoding: .utf8) {
+            return stringValue
+        }
+
+        return "<\(data.count) bytes>"
+    }
 }

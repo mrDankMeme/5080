@@ -12,30 +12,42 @@ final class DefaultSiteMakerRepository: SiteMakerRepositoryProtocol {
         self.remoteService = remoteService
     }
 
+    func fetchCurrentUser() async throws -> SiteMakerCurrentUser {
+        try await performAuthorizedRequest { context in
+            try await remoteService.fetchCurrentUser(
+                baseURLString: context.baseURLString,
+                accessToken: context.accessToken
+            )
+        }
+    }
+
     func listProjects() async throws -> [SiteMakerProjectSummary] {
-        let context = try await authorizationProvider.authorizedContext()
-        return try await remoteService.listProjects(
-            baseURLString: context.baseURLString,
-            accessToken: context.accessToken
-        )
+        try await performAuthorizedRequest { context in
+            try await remoteService.listProjects(
+                baseURLString: context.baseURLString,
+                accessToken: context.accessToken
+            )
+        }
     }
 
     func createProject(prompt: String) async throws -> SiteMakerProject {
-        let context = try await authorizationProvider.authorizedContext()
-        return try await remoteService.createProject(
-            baseURLString: context.baseURLString,
-            accessToken: context.accessToken,
-            prompt: prompt
-        )
+        try await performAuthorizedRequest { context in
+            try await remoteService.createProject(
+                baseURLString: context.baseURLString,
+                accessToken: context.accessToken,
+                prompt: prompt
+            )
+        }
     }
 
     func fetchProject(id: String) async throws -> SiteMakerProject {
-        let context = try await authorizationProvider.authorizedContext()
-        return try await remoteService.fetchProject(
-            baseURLString: context.baseURLString,
-            accessToken: context.accessToken,
-            projectID: id
-        )
+        try await performAuthorizedRequest { context in
+            try await remoteService.fetchProject(
+                baseURLString: context.baseURLString,
+                accessToken: context.accessToken,
+                projectID: id
+            )
+        }
     }
 
     func uploadAsset(
@@ -43,14 +55,15 @@ final class DefaultSiteMakerRepository: SiteMakerRepositoryProtocol {
         projectSlug: String,
         payload: SiteMakerAttachmentUploadPayload
     ) async throws -> SiteMakerUploadedAsset {
-        let context = try await authorizationProvider.authorizedContext()
-        return try await remoteService.uploadAsset(
-            baseURLString: context.baseURLString,
-            accessToken: context.accessToken,
-            projectID: projectID,
-            projectSlug: projectSlug,
-            payload: payload
-        )
+        try await performAuthorizedRequest { context in
+            try await remoteService.uploadAsset(
+                baseURLString: context.baseURLString,
+                accessToken: context.accessToken,
+                projectID: projectID,
+                projectSlug: projectSlug,
+                payload: payload
+            )
+        }
     }
 
     func streamClarify(
@@ -58,14 +71,15 @@ final class DefaultSiteMakerRepository: SiteMakerRepositoryProtocol {
         prompt: String,
         onEvent: @escaping @MainActor (SiteMakerStreamEvent) -> Void
     ) async throws {
-        let context = try await authorizationProvider.authorizedContext()
-        try await remoteService.streamClarify(
-            baseURLString: context.baseURLString,
-            accessToken: context.accessToken,
-            projectID: projectID,
-            prompt: prompt,
-            onEvent: onEvent
-        )
+        try await performAuthorizedRequest { context in
+            try await remoteService.streamClarify(
+                baseURLString: context.baseURLString,
+                accessToken: context.accessToken,
+                projectID: projectID,
+                prompt: prompt,
+                onEvent: onEvent
+            )
+        }
     }
 
     func streamGenerate(
@@ -73,14 +87,15 @@ final class DefaultSiteMakerRepository: SiteMakerRepositoryProtocol {
         prompt: String,
         onEvent: @escaping @MainActor (SiteMakerStreamEvent) -> Void
     ) async throws {
-        let context = try await authorizationProvider.authorizedContext()
-        try await remoteService.streamGenerate(
-            baseURLString: context.baseURLString,
-            accessToken: context.accessToken,
-            projectID: projectID,
-            prompt: prompt,
-            onEvent: onEvent
-        )
+        try await performAuthorizedRequest { context in
+            try await remoteService.streamGenerate(
+                baseURLString: context.baseURLString,
+                accessToken: context.accessToken,
+                projectID: projectID,
+                prompt: prompt,
+                onEvent: onEvent
+            )
+        }
     }
 
     func streamEdit(
@@ -88,13 +103,39 @@ final class DefaultSiteMakerRepository: SiteMakerRepositoryProtocol {
         instruction: String,
         onEvent: @escaping @MainActor (SiteMakerStreamEvent) -> Void
     ) async throws {
+        try await performAuthorizedRequest { context in
+            try await remoteService.streamEdit(
+                baseURLString: context.baseURLString,
+                accessToken: context.accessToken,
+                projectID: projectID,
+                instruction: instruction,
+                onEvent: onEvent
+            )
+        }
+    }
+}
+
+private extension DefaultSiteMakerRepository {
+    func performAuthorizedRequest<T>(
+        _ operation: (SiteMakerAuthorizedContext) async throws -> T
+    ) async throws -> T {
         let context = try await authorizationProvider.authorizedContext()
-        try await remoteService.streamEdit(
-            baseURLString: context.baseURLString,
-            accessToken: context.accessToken,
-            projectID: projectID,
-            instruction: instruction,
-            onEvent: onEvent
-        )
+
+        do {
+            return try await operation(context)
+        } catch let error as SiteMakerBuilderError where error.isUnauthorized {
+            let refreshedContext = try await authorizationProvider.authorizedContext()
+            return try await operation(refreshedContext)
+        }
+    }
+}
+
+private extension SiteMakerBuilderError {
+    var isUnauthorized: Bool {
+        guard case .backend(let statusCode, _) = self else {
+            return false
+        }
+
+        return statusCode == 401 || statusCode == 403
     }
 }

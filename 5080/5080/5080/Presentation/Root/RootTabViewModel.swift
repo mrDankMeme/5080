@@ -10,6 +10,7 @@ enum BillingPaywallDestination {
 protocol BillingAccessResolving: AnyObject {
     func destinationForHeaderTap() -> BillingPaywallDestination
     func destinationForGeneration(requiredTokens: Int) -> BillingPaywallDestination?
+    func refreshBillingState() async
 }
 
 @MainActor
@@ -18,6 +19,10 @@ final class DefaultBillingAccessResolver: BillingAccessResolving {
 
     init(purchaseManager: PurchaseManager) {
         self.purchaseManager = purchaseManager
+    }
+
+    func refreshBillingState() async {
+        await purchaseManager.refreshSubscriptionStatusFromProvider()
     }
 
     func destinationForHeaderTap() -> BillingPaywallDestination {
@@ -37,6 +42,10 @@ final class DefaultBillingAccessResolver: BillingAccessResolving {
 
 @MainActor
 final class RootTabViewModel: ObservableObject {
+    private enum Constants {
+        static let createGenerationCost = 1
+    }
+
     @Published private(set) var builderPresentation: BuilderPresentationContext?
     @Published private(set) var sitePreviewViewModel: SitePreviewSceneViewModel?
     @Published private(set) var isSettingsPresented = false
@@ -77,17 +86,29 @@ final class RootTabViewModel: ObservableObject {
     }
 
     func openPro() {
-        switch billingAccessResolver.destinationForHeaderTap() {
-        case .subscription:
-            isSubscriptionPaywallPresented = true
-            isTokensPaywallPresented = false
-        case .tokens:
-            isTokensPaywallPresented = true
-            isSubscriptionPaywallPresented = false
-        }
+        presentPaywall(for: billingAccessResolver.destinationForHeaderTap())
     }
 
-    func openCreate() {
+    func openCreate() async {
+        guard homeViewModel.canCreate else {
+            return
+        }
+
+        await billingAccessResolver.refreshBillingState()
+        await homeViewModel.refreshCreditsIfNeeded(force: true)
+
+        if let paywallDestination = billingAccessResolver.destinationForGeneration(
+            requiredTokens: Constants.createGenerationCost
+        ) {
+            #if DEBUG
+            print(
+                "[Base44][CreateGate] Blocked create. destination=\(String(describing: paywallDestination)), isSubscribed=\(homeViewModel.isSubscribed), credits=\(homeViewModel.availableCredits)"
+            )
+            #endif
+            presentPaywall(for: paywallDestination)
+            return
+        }
+
         guard let launch = homeViewModel.makeCreateLaunch() else {
             return
         }
@@ -116,7 +137,7 @@ final class RootTabViewModel: ObservableObject {
     }
 
     func refreshProjects() async {
-        await homeViewModel.refreshProjects()
+        await homeViewModel.refreshContent()
     }
 
     func makeBuilderViewModel(for launch: BuilderSceneLaunch) -> BuilderWorkspaceSceneViewModel {
@@ -129,5 +150,16 @@ final class RootTabViewModel: ObservableObject {
 
     func dismissTokensPaywall() {
         isTokensPaywallPresented = false
+    }
+
+    private func presentPaywall(for destination: BillingPaywallDestination) {
+        switch destination {
+        case .subscription:
+            isSubscriptionPaywallPresented = true
+            isTokensPaywallPresented = false
+        case .tokens:
+            isTokensPaywallPresented = true
+            isSubscriptionPaywallPresented = false
+        }
     }
 }

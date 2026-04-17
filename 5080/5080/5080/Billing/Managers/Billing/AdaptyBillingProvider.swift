@@ -6,7 +6,6 @@ import StoreKit
 @MainActor
 final class AdaptyBillingProvider: BillingProvider {
     private enum Constants {
-        static let fallbackUserIDKey = "adapty_fallback_user_id"
         static let cachedSubscribedKey = "adapty_cached_is_subscribed"
     }
 
@@ -147,12 +146,11 @@ final class AdaptyBillingProvider: BillingProvider {
     }
 
     func userID() -> String {
-        if let saved = UserDefaults.standard.string(forKey: Constants.fallbackUserIDKey), !saved.isEmpty {
-            return saved
-        }
-        let generated = UUID().uuidString
-        UserDefaults.standard.set(generated, forKey: Constants.fallbackUserIDKey)
-        return generated
+        let resolvedUserID = AppUserIdentityConfiguration.resolvedUserID()
+        logger.info(
+            "AdaptyBillingProvider: Resolved customerUserId=\(resolvedUserID, privacy: .public)"
+        )
+        return resolvedUserID
     }
 
     func trackPaywallShown(_ paywall: BillingPaywall?) {
@@ -194,10 +192,15 @@ private extension AdaptyBillingProvider {
     func refreshSubscriptionFromProfile() async -> Bool {
         do {
             let profile = try await Adapty.getProfile()
+            let syncedUserID = AppUserIdentityConfiguration.synchronizePersistedUserID(
+                profile.customerUserId ?? AppUserIdentityConfiguration.resolvedUserID()
+            )
             let key = BillingConfig.adaptyAccessLevelKey
             let isActive = profile.accessLevels[key]?.isActive == true
             UserDefaults.standard.set(isActive, forKey: Constants.cachedSubscribedKey)
-            logger.info("AdaptyBillingProvider: Refreshed profile. accessLevelKey=\(key, privacy: .public), isActive=\(isActive)")
+            logger.info(
+                "AdaptyBillingProvider: Refreshed profile. rawProfileId=\(profile.profileId, privacy: .public), customerUserId=\((profile.customerUserId ?? "nil"), privacy: .public), syncedAppUserId=\((syncedUserID ?? AppUserIdentityConfiguration.resolvedUserID()), privacy: .public), accessLevelKey=\(key, privacy: .public), isActive=\(isActive)"
+            )
             return isActive
         } catch {
             logger.error("AdaptyBillingProvider: Failed to refresh profile - \(String(describing: error), privacy: .public)")

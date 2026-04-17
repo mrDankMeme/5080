@@ -7,7 +7,6 @@ import StoreKit
 @MainActor
 final class PurchaseManager: ObservableObject {
     private let billingProvider: BillingProvider = AdaptyBillingProvider()
-    private let backendService: MiniMaxBackendService = PurchaseManager.makeBackendService()
 
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.arn.5080base44", category: "PurchaseManager")
 
@@ -67,6 +66,7 @@ final class PurchaseManager: ObservableObject {
         logger.info("PurchaseManager: Initializing billing manager")
         purchaseState = .loading
         self.userId = billingProvider.userID()
+        logger.info("PurchaseManager: Using app userId \(self.userId, privacy: .public)")
         self.isSubscribed = billingProvider.hasPremiumAccessSync()
         self.activeSubscriptionPlanTitle = isSubscribed ? "Premium Plan" : nil
         self.isShowedPaywall = !isSubscribed && isOnboardingFinished
@@ -184,10 +184,6 @@ final class PurchaseManager: ObservableObject {
                         "PurchaseManager: Applied local StoreKit token credit \(purchasedTokens) for product \(product.id)"
                     )
                 }
-                #if DEBUG
-                await performDebugSubscriptionTopUpAfterPurchaseIfNeeded(product: product)
-                #endif
-                await syncBalanceFromBackendIfPossible(reason: "purchase_success_\(product.id)")
                 self.purchaseState = .ready
                 self.purchaseError = nil
                 self.isShowedPaywall = !self.isSubscribed && self.isOnboardingFinished
@@ -207,7 +203,6 @@ final class PurchaseManager: ObservableObject {
         Task { @MainActor in
             let result = await billingProvider.restorePurchases()
             await refreshSubscriptionStatusFromProvider()
-            await syncBalanceFromBackendIfPossible(reason: "restore")
 
             if result.hasActiveSubscription {
                 self.logger.info("PurchaseManager: Restore successful - active subscription found")
@@ -337,112 +332,6 @@ private extension PurchaseManager {
         return "[\(items.joined(separator: ", "))]"
     }
 
-    func syncBalanceFromBackendIfPossible(reason: String) async {
-        let resolvedUserID = userId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !resolvedUserID.isEmpty else {
-            logger.warning(
-                "PurchaseManager: Skipping backend balance sync for \(reason, privacy: .public) because userId is empty"
-            )
-            return
-        }
-
-        do {
-            let auth = try await backendService.authorize(userId: resolvedUserID, gender: "m")
-            updateAvailableGenerations(auth.availableGenerations)
-            logger.info(
-                "PurchaseManager: Backend auth sync completed for \(reason, privacy: .public). availableGenerations=\(auth.availableGenerations)"
-            )
-        } catch {
-            logger.warning(
-                "PurchaseManager: Backend auth sync failed for \(reason, privacy: .public) - \(error.localizedDescription, privacy: .public)"
-            )
-        }
-
-        do {
-            let profile = try await backendService.fetchProfile(userId: resolvedUserID)
-            updateAvailableGenerations(profile.availableGenerations)
-            logger.info(
-                "PurchaseManager: Backend profile sync completed for \(reason, privacy: .public). availableGenerations=\(profile.availableGenerations)"
-            )
-        } catch {
-            logger.error(
-                "PurchaseManager: Backend profile sync failed for \(reason, privacy: .public) - \(error.localizedDescription, privacy: .public)"
-            )
-        }
-    }
-
-    #if DEBUG
-    func performDebugSubscriptionTopUpAfterPurchaseIfNeeded(product: BillingProduct) async {
-        guard product.kind == .subscription else { return }
-
-        let resolvedUserID = userId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !resolvedUserID.isEmpty else {
-            logger.warning("PurchaseManager: Debug subscription top-up skipped because userId is empty")
-            return
-        }
-
-        do {
-            let auth = try await backendService.authorize(userId: resolvedUserID, gender: "m")
-            updateAvailableGenerations(auth.availableGenerations)
-        } catch {
-            logger.warning(
-                "PurchaseManager: Debug top-up login failed for \(product.id, privacy: .public) - \(error.localizedDescription, privacy: .public)"
-            )
-        }
-
-        do {
-            try await backendService.setFreeGenerations(userId: resolvedUserID)
-        } catch {
-            logger.warning(
-                "PurchaseManager: Debug top-up setFreeGenerations failed for \(product.id, privacy: .public) - \(error.localizedDescription, privacy: .public)"
-            )
-        }
-
-        var tariffID: Int?
-
-        do {
-            let auth = try await backendService.authorize(userId: resolvedUserID, gender: "m")
-            updateAvailableGenerations(auth.availableGenerations)
-            tariffID = auth.statTariffId
-        } catch {
-            logger.warning(
-                "PurchaseManager: Debug top-up post-setFree login failed for \(product.id, privacy: .public) - \(error.localizedDescription, privacy: .public)"
-            )
-        }
-
-        if tariffID == nil || tariffID == 0 {
-            do {
-                let profile = try await backendService.fetchProfile(userId: resolvedUserID)
-                updateAvailableGenerations(profile.availableGenerations)
-                tariffID = profile.statTariffId
-            } catch {
-                logger.warning(
-                    "PurchaseManager: Debug top-up profile fetch failed for \(product.id, privacy: .public) - \(error.localizedDescription, privacy: .public)"
-                )
-            }
-        }
-
-        guard let resolvedTariffID = tariffID, resolvedTariffID > 0 else {
-            logger.warning(
-                "PurchaseManager: Debug top-up skipped addGenerations for \(product.id, privacy: .public) because tariffId is missing"
-            )
-            return
-        }
-
-        for attempt in 1...7 {
-            guard !Task.isCancelled else { return }
-
-            do {
-                try await backendService.addGenerations(userId: resolvedUserID, productId: resolvedTariffID)
-            } catch {
-                logger.warning(
-                    "PurchaseManager: Debug top-up addGenerations attempt \(attempt) failed for \(product.id, privacy: .public) - \(error.localizedDescription, privacy: .public)"
-                )
-            }
-        }
-    }
-    #endif
-
     func tokenAmount(from productID: String) -> Int? {
         let parts = productID.split { !$0.isNumber }
         guard let firstNumericChunk = parts.first else {
@@ -481,17 +370,5 @@ extension PurchaseManager {
 
     func generationPrice(for type: GenerateType) -> Int {
         generationPriceByMode[.generate(type)] ?? 0
-    }
-}
-
-private extension PurchaseManager {
-    static func makeBackendService() -> MiniMaxBackendService {
-        MiniMaxBackendServiceImpl(
-            config: APIConfig(
-                baseURL: URL(string: MiniMaxBackendDefaults.baseURLString)!,
-                bearerToken: MiniMaxBackendDefaults.bearerToken
-            ),
-            http: URLSessionHTTPClient()
-        )
     }
 }
