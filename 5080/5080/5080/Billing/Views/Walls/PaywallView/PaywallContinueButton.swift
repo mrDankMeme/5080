@@ -10,7 +10,7 @@ struct PaywallContinueButton: View {
     var body: some View {
         Button(action: onTap) {
             Text(title)
-                .font(Tokens.Font.semibold17)
+                .font(Tokens.Font.paywallButton16)
                 .foregroundStyle(Color.white)
                 .frame(maxWidth: .infinity)
                 .frame(height: PaywallLayout.continueHeight)
@@ -19,9 +19,10 @@ struct PaywallContinueButton: View {
                         cornerRadius: Tokens.Radius.medium,
                         style: .continuous
                     )
-                    .fill(Tokens.Color.accentGradient)
+                    .fill(Tokens.Color.onboardingContinueButton)
                 )
         }
+        .buttonStyle(.plain)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1.0 : 0.55)
     }

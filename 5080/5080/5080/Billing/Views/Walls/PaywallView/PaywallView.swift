@@ -163,135 +163,70 @@ struct PaywallView: View {
     private func bottomCard(geo: GeometryProxy) -> some View {
         let safeBottom = geo.safeAreaInsets.bottom
         let cardHeight = paywallCardHeight(for: geo, safeBottom: safeBottom)
-        let annualProduct = productsForLayout.first(where: isAnnualProduct)
-        let weeklyProduct = productsForLayout.first(where: isWeeklyProduct)
-
-        VStack(spacing: 0) {
-            Text("Unlock Full AI Power")
-                .font(Tokens.Font.outfitBold28)
-                .kerning(-0.28.scale)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(Color(hex: "141414") ?? .black)
-                .lineSpacing(4.scale)
-                .padding(.top, 24.scale)
-                .padding(.horizontal, 20.scale)
-
-            Text("Create unlimited AI videos, voices, and transcriptions, or proceed with limits.")
-                .font(Tokens.Font.regular16)
-                .kerning(0.16.scale)
-                .foregroundStyle(Color(hex: "141414")?.opacity(0.86) ?? .black.opacity(0.86))
-                .multilineTextAlignment(.center)
-                .lineSpacing(DeviceLayout.isPad ? 4.scale : 8.scale)
-                .lineLimit(DeviceLayout.isPad ? 2 : 3)
-                .fixedSize(horizontal: false, vertical: true)
-                .layoutPriority(1)
-                .padding(.top, 12.scale)
-                .padding(.horizontal, DeviceLayout.isPad ? 40.scale : 24.scale)
-
-            VStack(spacing: 4.scale) {
-                if purchaseManager.purchaseState == .loading || productsForLayout.isEmpty {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .tint(Tokens.Color.accent)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: (68.scale * 2) + 4.scale)
-                } else {
-                    if let annualProduct {
-                        PaywallPlanOptionRow(
-                            title: "Annual",
-                            subtitle: annualPerWeekText(for: annualProduct),
-                            priceText: "\(annualProduct.localizedPrice) / year",
-                            isSelected: pickedProd?.id == annualProduct.id,
-                            showsPopularBadge: true,
-                            isEnabled: !purchaseManager.isLoading,
-                            onTap: {
-                                pickedProd = annualProduct
-                            }
-                        )
-                    }
-
-                    if let weeklyProduct {
-                        PaywallPlanOptionRow(
-                            title: "Weekly",
-                            subtitle: nil,
-                            priceText: "\(weeklyProduct.localizedPrice) / week",
-                            isSelected: pickedProd?.id == weeklyProduct.id,
-                            showsPopularBadge: false,
-                            isEnabled: !purchaseManager.isLoading,
-                            onTap: {
-                                pickedProd = weeklyProduct
-                            }
-                        )
-                    }
+        PaywallBottomCardView(
+            titleText: "Create Apps & Websites Just by Chatting with AI",
+            cancelText: "Cancel Anytime",
+            continueText: "Continue",
+            footerTerms: "Terms of Use",
+            footerRestore: "Restore",
+            footerPrivacy: "Privacy Policy",
+            products: productsForLayout,
+            sortedProductsForUI: productsForLayout,
+            purchaseState: purchaseManager.purchaseState,
+            isReady: purchaseManager.isReady,
+            isLoading: purchaseManager.isLoading,
+            pickedProd: $pickedProd,
+            onPick: { product in
+                pickedProd = product
+            },
+            onOpenTerms: {
+                if let termsURL {
+                    openSafari(termsURL)
                 }
-            }
-            .padding(.top, 24.scale)
-            .padding(.horizontal, 16.scale)
-
-            Text("Cancel Anytime")
-                .font(Tokens.Font.medium14)
-                .kerning(0.16.scale)
-                .foregroundStyle(Color(hex: "141414")?.opacity(0.6) ?? Color.black.opacity(0.6))
-                .padding(.top, 16.scale)
-
-            Button {
-                guard let product = pickedProd else { return }
+            },
+            onRestore: {
+                Task { await restoreTapped() }
+            },
+            onOpenPrivacy: {
+                if let privacyURL {
+                    openSafari(privacyURL)
+                }
+            },
+            onContinue: { product in
                 purchaseManager.makePurchase(product: product) { success, _ in
                     if success {
                         close(reason: "purchase_success_callback")
                     }
                 }
-            } label: {
-                Text("Continue")
-                    .font(Tokens.Font.semibold17)
-                    .kerning(-0.17.scale)
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 52.scale)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16.scale, style: .continuous)
-                            .fill(Tokens.Color.accent)
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(pickedProd == nil || purchaseManager.isLoading || !purchaseManager.isReady)
-            .opacity((pickedProd == nil || purchaseManager.isLoading || !purchaseManager.isReady) ? 0.6 : 1.0)
-            .padding(.horizontal, 16.scale)
-            .padding(.top, 16.scale)
-
-            HStack(spacing: 32.scale) {
-                Button("Privacy Policy") {
-                    if let privacyURL {
-                        openSafari(privacyURL)
-                    }
+            },
+            planTitle: { product in
+                if isAnnualProduct(product) {
+                    return "Yearly"
                 }
-                .disabled(privacyURL == nil)
-
-                Button("Restore") {
-                    Task { await restoreTapped() }
+                if isWeeklyProduct(product) {
+                    return "Weekly"
                 }
-
-                Button("Terms of Use") {
-                    if let termsURL {
-                        openSafari(termsURL)
-                    }
+                return PaywallProductText.planTitle(for: product, isEnglishUI: true)
+            },
+            planSubtitle: { product in
+                if isAnnualProduct(product) {
+                    return "$1.5 / site"
                 }
-                .disabled(termsURL == nil)
-            }
-            .buttonStyle(.plain)
-            .font(Tokens.Font.regular13)
-            .kerning(0.13.scale)
-            .foregroundStyle(Color(hex: "141414")?.opacity(0.6) ?? Color.black.opacity(0.6))
-            .padding(.top, 8.scale)
-
-            Spacer(minLength: footerBottomSpacing(safeBottom: safeBottom))
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: cardHeight, alignment: .top)
-        .background(
-            TopRoundedCornersShape(radius: 32.scale)
-                .fill(Color.white)
+                if isWeeklyProduct(product) {
+                    return "$2.6 / site"
+                }
+                return ""
+            },
+            planPriceText: { product in
+                product.localizedPrice
+            },
+            planBadgeText: { product in
+                isAnnualProduct(product) ? "SAVE 40%" : nil
+            },
+            bottomSafeInset: safeBottom
         )
+        .frame(maxWidth: .infinity)
+        .frame(height: cardHeight, alignment: .bottom)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .ignoresSafeArea(.container, edges: .bottom)
     }
@@ -328,36 +263,23 @@ struct PaywallView: View {
         }
     }
 
-    private func footerBottomSpacing(safeBottom: CGFloat) -> CGFloat {
-        switch DeviceLayout.type {
-        case .smallStatusBar:
-            return 16.scale
-        case .iPad:
-            return max(20.scale, safeBottom)
-        case .unknown:
-            return max(16.scale, safeBottom)
-        case .notch, .dynamicIsland:
-            return max(10.scale, safeBottom - 4.scale)
-        }
-    }
-
     private func paywallCardHeight(for geo: GeometryProxy, safeBottom: CGFloat) -> CGFloat {
         let baseHeight: CGFloat
 
         switch DeviceLayout.type {
         case .smallStatusBar:
-            baseHeight = 410.scale
+            baseHeight = 360.scale
         case .notch, .dynamicIsland:
-            baseHeight = 450.scale
+            baseHeight = 400.scale
         case .iPad:
-            baseHeight = 436.scale
+            baseHeight = 390.scale
         case .unknown:
-            baseHeight = 460.scale
+            baseHeight = 408.scale
         }
 
         let raw = baseHeight + safeBottom
-        let minHeight = DeviceLayout.isPad ? 432.scale : (DeviceLayout.isSmallStatusBarPhone ? 410.scale : 420.scale)
-        let maxHeight = max(360.scale, geo.size.height - (DeviceLayout.isPad ? 120.scale : 96.scale))
+        let minHeight = DeviceLayout.isPad ? 380.scale : (DeviceLayout.isSmallStatusBarPhone ? 350.scale : 372.scale)
+        let maxHeight = max(320.scale, geo.size.height - (DeviceLayout.isPad ? 132.scale : 120.scale))
 
         return min(max(raw, minHeight), maxHeight)
     }
@@ -476,28 +398,6 @@ struct PaywallView: View {
         return product.id.lowercased().contains("week")
     }
 
-    private func annualPerWeekText(for annualProduct: BillingProduct) -> String {
-        if let localizedPricePerWeek = annualProduct.localizedPricePerWeek, !localizedPricePerWeek.isEmpty {
-            let lower = localizedPricePerWeek.lowercased()
-            if lower.contains("week") || lower.contains("нед") {
-                return localizedPricePerWeek
-            }
-            return "\(localizedPricePerWeek) / week"
-        }
-
-        let annualDecimal = NSDecimalNumber(decimal: annualProduct.price)
-        let perWeek = annualDecimal.dividing(by: NSDecimalNumber(value: 52))
-
-        let formatter = NumberFormatter()
-        formatter.locale = .current
-        formatter.numberStyle = .currency
-        formatter.minimumFractionDigits = 2
-        formatter.maximumFractionDigits = 2
-
-        let weeklyPrice = formatter.string(from: perWeek) ?? annualProduct.localizedPrice
-        return "\(weeklyPrice) / week"
-    }
-
     private func applyWindowInterfaceStyle(_ style: UIUserInterfaceStyle) {
         let scenes = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -518,114 +418,5 @@ private enum PaywallSheet: Identifiable {
         case .safari(let url):
             return "safari_\(url.absoluteString)"
         }
-    }
-}
-
-private struct TopRoundedCornersShape: Shape {
-    let radius: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        let path = UIBezierPath(
-            roundedRect: rect,
-            byRoundingCorners: [.topLeft, .topRight],
-            cornerRadii: CGSize(width: radius, height: radius)
-        )
-        return Path(path.cgPath)
-    }
-}
-
-private struct PaywallPlanOptionRow: View {
-    let title: String
-    let subtitle: String?
-    let priceText: String
-    let isSelected: Bool
-    let showsPopularBadge: Bool
-    let isEnabled: Bool
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            ZStack(alignment: .topTrailing) {
-                RoundedRectangle(cornerRadius: 40.scale, style: .continuous)
-                    .fill(isSelected ? Tokens.Color.accentSoft : (Color(hex: "F2F2F4") ?? Color.gray.opacity(0.12)))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 40.scale, style: .continuous)
-                            .stroke(Tokens.Color.accent, lineWidth: isSelected ? 1.5.scale : 0)
-                    )
-
-                HStack(spacing: 12.scale) {
-                    selectionBullet
-                        .padding(.leading, 16.scale)
-
-                    VStack(alignment: .leading, spacing: 4.scale) {
-                        Text(title)
-                            .font(Tokens.Font.outfitSemibold16)
-                            .kerning(-0.16.scale)
-                            .foregroundStyle(Color(hex: "141414") ?? .black)
-                            .lineLimit(1)
-
-                        if let subtitle {
-                            Text(subtitle)
-                                .font(Tokens.Font.medium14)
-                                .kerning(-0.14.scale)
-                                .foregroundStyle(Color(hex: "14141499") ?? Color.black.opacity(0.6))
-                                .lineLimit(1)
-                        }
-                    }
-
-                    Spacer(minLength: 12.scale)
-
-                    Text(priceText)
-                        .font(Tokens.Font.outfitSemibold18)
-                        .kerning(-0.18.scale)
-                        .foregroundStyle(Color(hex: "141414") ?? .black)
-                        .multilineTextAlignment(.trailing)
-                        .lineLimit(1)
-                        .padding(.trailing, 16.scale)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if showsPopularBadge {
-                    Text("Popular")
-                        .font(Tokens.Font.medium14)
-                        .kerning(-0.14.scale)
-                        .foregroundStyle(.white)
-                        .frame(width: 75.scale, height: 22.scale)
-                        .background(
-                            Capsule()
-                                .fill(Tokens.Color.accent)
-                                .overlay(
-                                    Capsule()
-                                        .stroke(Tokens.Color.accent, lineWidth: 1.5.scale)
-                                )
-                        )
-                        .offset(x: -16.scale, y: -11.scale)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 68.scale)
-            .contentShape(RoundedRectangle(cornerRadius: 40.scale, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled)
-    }
-
-    private var selectionBullet: some View {
-        ZStack {
-            if isSelected {
-                Circle()
-                    .fill(Tokens.Color.accent)
-                    .frame(width: 24.scale, height: 24.scale)
-
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: 8.scale, height: 8.scale)
-            } else {
-                Circle()
-                    .stroke(Color(hex: "C4C4C7") ?? Color.gray.opacity(0.6), lineWidth: 2.scale)
-                    .frame(width: 24.scale, height: 24.scale)
-            }
-        }
-        .frame(width: 24.scale, height: 24.scale)
     }
 }

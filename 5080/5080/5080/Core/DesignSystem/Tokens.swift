@@ -53,6 +53,39 @@ public enum Tokens {
         public static var inkPrimary30: SwiftUI.Color {
             SwiftUI.Color(hex: "1414144D") ?? SwiftUI.Color.black.opacity(0.3)
         }
+        public static var onboardingTitle: SwiftUI.Color {
+            SwiftUI.Color(hex: "212121") ?? inkPrimary
+        }
+        public static var onboardingSubtitle: SwiftUI.Color {
+            SwiftUI.Color(hex: "212121")?.opacity(0.7) ?? inkPrimary.opacity(0.7)
+        }
+        public static var onboardingFooter: SwiftUI.Color {
+            SwiftUI.Color(hex: "212121")?.opacity(0.5) ?? inkPrimary.opacity(0.5)
+        }
+        public static var onboardingContinueButton: SwiftUI.Color {
+            SwiftUI.Color(hex: "F3671B") ?? accent
+        }
+        public static var paywallPrimaryText: SwiftUI.Color {
+            SwiftUI.Color(hex: "212121") ?? inkPrimary
+        }
+        public static var paywallSecondaryText: SwiftUI.Color {
+            SwiftUI.Color(hex: "212121")?.opacity(0.7) ?? inkPrimary.opacity(0.7)
+        }
+        public static var paywallTertiaryText: SwiftUI.Color {
+            SwiftUI.Color(hex: "212121")?.opacity(0.5) ?? inkPrimary.opacity(0.5)
+        }
+        public static var paywallSelectedOptionFill: SwiftUI.Color {
+            SwiftUI.Color(hex: "F3671B")?.opacity(0.25) ?? accent.opacity(0.25)
+        }
+        public static var paywallSelectedOptionStroke: SwiftUI.Color {
+            SwiftUI.Color(hex: "F3671B") ?? accent
+        }
+        public static var paywallOptionFill: SwiftUI.Color {
+            SwiftUI.Color(hex: "F3FDFF") ?? surfaceWhite
+        }
+        public static var paywallOptionStroke: SwiftUI.Color {
+            SwiftUI.Color(hex: "212121")?.opacity(0.05) ?? inkPrimary.opacity(0.05)
+        }
         public static var toastSurface: SwiftUI.Color {
             SwiftUI.Color(hex: "F2F2F2") ?? SwiftUI.Color.white
         }
@@ -110,6 +143,13 @@ public enum Tokens {
         public static var regular12: SwiftUI.Font { .custom("SFProText-Regular", size: 12.scale) }
         public static var medium13: SwiftUI.Font { .custom("SFProText-Medium", size: 13.scale) }
         public static var medium12: SwiftUI.Font { .custom("SFProText-Medium", size: 12.scale) }
+        public static var onboardingTitle20: SwiftUI.Font { .custom("SFProDisplay-Bold", size: 20.scale) }
+        public static var onboardingBody16: SwiftUI.Font { .custom("SFProText-Medium", size: 16.scale) }
+        public static var onboardingButton16: SwiftUI.Font { .custom("SFProText-Medium", size: 16.scale) }
+        public static var onboardingFooter13: SwiftUI.Font { .custom("SFProText-Regular", size: 13.scale) }
+        public static var paywallTitle20: SwiftUI.Font { .custom("SFProDisplay-Bold", size: 20.scale) }
+        public static var paywallButton16: SwiftUI.Font { .custom("SFProText-Medium", size: 16.scale) }
+        public static var paywallFooter13: SwiftUI.Font { .custom("SFProText-Regular", size: 13.scale) }
 
         // MARK: - Lato
         public static var latoRegular14: SwiftUI.Font { .custom("Lato-Regular", size: 13.scale) }

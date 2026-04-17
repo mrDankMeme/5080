@@ -11,10 +11,6 @@ struct PaywallBottomCardView: View {
     let footerRestore: String
     let footerPrivacy: String
 
-    let termsURL: URL?
-    let privacyURL: URL?
-    let openURL: OpenURLAction
-
     let products: [BillingProduct]
     let sortedProductsForUI: [BillingProduct]
 
@@ -25,30 +21,41 @@ struct PaywallBottomCardView: View {
     @Binding var pickedProd: BillingProduct?
 
     let onPick: (BillingProduct) -> Void
+    let onOpenTerms: () -> Void
     let onRestore: () -> Void
+    let onOpenPrivacy: () -> Void
     let onContinue: (BillingProduct) -> Void
 
     let planTitle: (BillingProduct) -> String
     let planSubtitle: (BillingProduct) -> String
     let planPriceText: (BillingProduct) -> String
-    let planSecondaryPriceText: (BillingProduct) -> String?
+    let planBadgeText: (BillingProduct) -> String?
 
     let bottomSafeInset: CGFloat
 
     var body: some View {
         VStack(spacing: 0) {
+            Spacer(minLength: 0)
 
             Text(titleText)
-                .font(Tokens.Font.bold22)
-                .foregroundStyle(Color.white)
-                .padding(.top, PaywallLayout.titleTop)
+                .font(Tokens.Font.paywallTitle20)
+                .foregroundStyle(Tokens.Color.paywallPrimaryText)
+                .multilineTextAlignment(.center)
+                .lineSpacing(2.scale)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, PaywallLayout.cardHorizontalInset)
 
             productsBlock
                 .padding(.top, PaywallLayout.titleToProducts)
+                .padding(.horizontal, PaywallLayout.cardHorizontalInset)
 
-            Text(cancelText)
-                .font(.system(size: 16.scale, weight: .regular))
-                .foregroundStyle(Color.gray.opacity(0.8))
+            HStack(spacing: 6.scale) {
+                Image(systemName: "arrow.clockwise")
+                    .font(Tokens.Font.regular14)
+                Text(cancelText)
+                    .font(Tokens.Font.regular14)
+            }
+            .foregroundStyle(Tokens.Color.paywallTertiaryText)
                 .padding(.top, PaywallLayout.productsToCancel)
 
             PaywallContinueButton(
@@ -60,33 +67,26 @@ struct PaywallBottomCardView: View {
                 }
             )
             .padding(.top, PaywallLayout.cancelToContinue)
+            .padding(.horizontal, PaywallLayout.cardHorizontalInset)
 
 
             PaywallFooterLinksView(
                 termsTitle: footerTerms,
                 restoreTitle: footerRestore,
                 privacyTitle: footerPrivacy,
-                termsURL: termsURL,
-                privacyURL: privacyURL,
-                openURL: openURL,
-                onRestore: onRestore
+                onTerms: onOpenTerms,
+                onRestore: onRestore,
+                onPrivacy: onOpenPrivacy
             )
             .padding(.top, PaywallLayout.continueToFooter)
 
-
-            Spacer()
-                .frame(
-                    height: DeviceLayout.isSmallStatusBarPhone || DeviceLayout.isUnknown
-                        ? bottomSafeInset + PaywallLayout.bottomSafeExtra
-                        : 40.scale
-                )
         }
-        .padding(.horizontal, PaywallLayout.cardHorizontalInset)
-        .frame(maxWidth: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: PaywallLayout.bottomCardCorner, style: .continuous)
-                .fill(Color(hex: "#101623")!)
+        .padding(
+            .bottom,
+            max(PaywallLayout.bottomSafeExtra, bottomSafeInset)
         )
+        .frame(maxWidth: .infinity)
+        .background(Color.clear)
     }
 
     @ViewBuilder
@@ -102,7 +102,7 @@ struct PaywallBottomCardView: View {
                 planTitle: planTitle,
                 planSubtitle: planSubtitle,
                 planPriceText: planPriceText,
-                planSecondaryPriceText: planSecondaryPriceText
+                planBadgeText: planBadgeText
             )
         } else {
             ScrollView(showsIndicators: false) {
@@ -116,7 +116,7 @@ struct PaywallBottomCardView: View {
                     planTitle: planTitle,
                     planSubtitle: planSubtitle,
                     planPriceText: planPriceText,
-                    planSecondaryPriceText: planSecondaryPriceText
+                    planBadgeText: planBadgeText
                 )
             }
             .frame(maxHeight: PaywallLayout.productsScrollMaxHeight)

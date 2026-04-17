@@ -4,6 +4,18 @@
 <dict>
 	<key>UIAppFonts</key>
 	<array>
+		<string>BowlbyOne-Regular.ttf</string>
+		<string>InterTight-Medium.ttf</string>
+		<string>Lato-Black.ttf</string>
+		<string>Lato-BlackItalic.ttf</string>
+		<string>Lato-Bold.ttf</string>
+		<string>Lato-BoldItalic.ttf</string>
+		<string>Lato-Italic.ttf</string>
+		<string>Lato-Light.ttf</string>
+		<string>Lato-LightItalic.ttf</string>
+		<string>Lato-Regular.ttf</string>
+		<string>Lato-Thin.ttf</string>
+		<string>Lato-ThinItalic.ttf</string>
 		<string>Outfit-Black.ttf</string>
 		<string>Outfit-Bold.ttf</string>
 		<string>Outfit-ExtraBold.ttf</string>
@@ -13,6 +25,16 @@
 		<string>Outfit-Regular.ttf</string>
 		<string>Outfit-SemiBold.ttf</string>
 		<string>Outfit-Thin.ttf</string>
+		<string>SF-Pro-Display-Bold.otf</string>
+		<string>SF-Pro-Display-Heavy.otf</string>
+		<string>SF-Pro-Display-Medium.otf</string>
+		<string>SF-Pro-Display-Regular.otf</string>
+		<string>SF-Pro-Display-Semibold.otf</string>
+		<string>SFProText-Bold.ttf</string>
+		<string>SFProText-Heavy.ttf</string>
+		<string>SFProText-Medium.ttf</string>
+		<string>SFProText-Regular.ttf</string>
+		<string>SFProText-Semibold.ttf</string>
 	</array>
 	<key>UIFileSharingEnabled</key>
 	<true/>

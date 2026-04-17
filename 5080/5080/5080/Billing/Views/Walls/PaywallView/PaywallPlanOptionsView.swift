@@ -15,14 +15,14 @@ struct PaywallPlanOptionsView: View {
     let planTitle: (BillingProduct) -> String
     let planSubtitle: (BillingProduct) -> String
     let planPriceText: (BillingProduct) -> String
-    let planSecondaryPriceText: (BillingProduct) -> String?
+    let planBadgeText: (BillingProduct) -> String?
 
     var body: some View {
         VStack(spacing: PaywallLayout.productsSpacing) {
             if purchaseState == .loading || products.isEmpty {
                 ProgressView()
                     .progressViewStyle(.circular)
-                    .tint(Color.gray)
+                    .tint(Tokens.Color.paywallSelectedOptionStroke)
                     .scaleEffect(1.2)
                     .padding(.vertical, 24.scale)
             } else {
@@ -31,12 +31,11 @@ struct PaywallPlanOptionsView: View {
                         onPick(product)
                     } label: {
                         PaywallPlanRowView(
-                            product: product,
                             isPicked: pickedProd?.id == product.id,
                             planTitle: planTitle(product),
                             planSubtitle: planSubtitle(product),
                             planPriceText: planPriceText(product),
-                            planSecondaryPriceText: planSecondaryPriceText(product)
+                            badgeText: planBadgeText(product)
                         )
                     }
                     .buttonStyle(.plain)

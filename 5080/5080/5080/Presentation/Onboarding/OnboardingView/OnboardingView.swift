@@ -31,12 +31,7 @@ public struct OnboardingView: View {
                             removal: .move(edge: .leading).combined(with: .opacity)
                         ))
                 } else {
-                    currentSlideBackground(in: proxy)
-                        .id(vm.slides[vm.currentIndex].id)
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .trailing).combined(with: .opacity),
-                            removal: .move(edge: .leading).combined(with: .opacity)
-                        ))
+                    onboardingSlidesImageStrip(in: proxy)
                 }
 
                 if vm.currentIndex < vm.slides.count {
@@ -44,8 +39,6 @@ public struct OnboardingView: View {
                     OnboardingBottomCardView(
                         title: slide.title,
                         subtitle: slide.subtitle,
-                        currentIndex: vm.currentIndex,
-                        pageCount: vm.slides.count,
                         bottomSafeInset: proxy.safeAreaInsets.bottom,
                         isPrimaryLoading: isPrimaryButtonLoading,
                         onPrimaryTap: {
@@ -61,20 +54,29 @@ public struct OnboardingView: View {
                             openSafari(vm.links.privacyURL)
                         }
                     )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .frame(width: proxy.size.width)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
                     .offset(y: -onboardingBottomLift(safeBottom: proxy.safeAreaInsets.bottom))
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(2)
                 }
             }
-            .background(Color.clear.ignoresSafeArea())
+            .background(
+                Group {
+                    if vm.isOnPaywallStep {
+                        Color.clear
+                    } else {
+                        onboardingBackgroundView
+                    }
+                }
+            )
             .animation(
                 .interactiveSpring(
                     response: 0.45,
                     dampingFraction: 0.88,
                     blendDuration: 0.2
                 ),
-                value: vm.currentIndex
+                value: vm.isOnPaywallStep
             )
             .ignoresSafeArea(.all)
         }
@@ -122,6 +124,18 @@ public struct OnboardingView: View {
 }
 
 private extension OnboardingView {
+    enum OnboardingAssets {
+        static let backgroundImageName = "Onboarding.Background"
+    }
+
+    var slideMovementAnimation: Animation {
+        .interactiveSpring(
+            response: 0.45,
+            dampingFraction: 0.88,
+            blendDuration: 0.2
+        )
+    }
+
     var isPrimaryButtonLoading: Bool {
         vm.isRequestingNotificationPermission
     }
@@ -129,23 +143,6 @@ private extension OnboardingView {
     func handlePrimaryTap() {
         Task {
             await vm.advance()
-        }
-    }
-
-    @ViewBuilder
-    func currentSlideBackground(in proxy: GeometryProxy) -> some View {
-        if vm.currentIndex < vm.slides.count {
-            let slide = vm.slides[vm.currentIndex]
-            Image(slide.imageName)
-                .resizable()
-                .scaledToFill()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .clipped()
-                .ignoresSafeArea(.all)
-                .allowsHitTesting(false)
-        } else {
-            Color.black
-                .ignoresSafeArea(.all)
         }
     }
 
@@ -238,5 +235,48 @@ private extension OnboardingView {
         }
 
         AppStore.requestReview(in: windowScene)
+    }
+
+    @ViewBuilder
+    var onboardingBackgroundView: some View {
+        if let uiImage = UIImage(named: OnboardingAssets.backgroundImageName) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .scaledToFill()
+                .ignoresSafeArea(.all)
+        } else {
+            Tokens.Color.inkPrimary
+                .ignoresSafeArea(.all)
+        }
+    }
+
+    @ViewBuilder
+    func onboardingSlidesImageStrip(in proxy: GeometryProxy) -> some View {
+        HStack(spacing: 0) {
+            ForEach(vm.slides) { slide in
+                onboardingSlideImageView(slide)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+            }
+        }
+        .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
+        .offset(x: -CGFloat(vm.currentIndex) * proxy.size.width)
+        .clipped()
+        .ignoresSafeArea(.all)
+        .allowsHitTesting(false)
+        .animation(slideMovementAnimation, value: vm.currentIndex)
+    }
+
+    @ViewBuilder
+    func onboardingSlideImageView(_ slide: OnboardingSlide) -> some View {
+        let resolvedScale = slide.scale.resolve(for: DeviceLayout.type)
+        Image(slide.imageName)
+            .resizable()
+            .scaledToFit()
+            .frame(
+                width: slide.imageWidth * resolvedScale.x,
+                height: slide.imageHeight * resolvedScale.y
+            )
+            .padding(.top, slide.imageTopOffset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }

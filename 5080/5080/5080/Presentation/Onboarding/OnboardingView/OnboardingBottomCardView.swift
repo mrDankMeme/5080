@@ -1,12 +1,9 @@
 
 import SwiftUI
-import UIKit
 
 struct OnboardingBottomCardView: View {
     let title: String
     let subtitle: String
-    let currentIndex: Int
-    let pageCount: Int
 
     let bottomSafeInset: CGFloat
 
@@ -24,71 +21,87 @@ struct OnboardingBottomCardView: View {
     private var cardMinHeight: CGFloat {
         switch layoutType {
         case .smallStatusBar:
+            return 214.scale
+        case .iPad:
             return 228.scale
-        case .iPad:
-            return 240.scale
         case .unknown:
-            return 244.scale
+            return 220.scale
         case .notch, .dynamicIsland:
-            return 254.scale
-        }
-    }
-
-    private var topIndicatorPadding: CGFloat {
-        switch layoutType {
-        case .smallStatusBar:
-            return 12.scale
-        case .iPad:
-            return 18.scale
-        case .unknown:
-            return 14.scale
-        case .notch, .dynamicIsland:
-            return 16.scale
+            return 234.scale
         }
     }
 
     private var contentBottomPadding: CGFloat {
         switch layoutType {
         case .smallStatusBar:
+            return 10.scale
+        case .iPad:
+            return max(12.scale, bottomSafeInset)
+        case .unknown:
+            return max(10.scale, bottomSafeInset)
+        case .notch, .dynamicIsland:
+            return max(8.scale, bottomSafeInset)
+        }
+    }
+
+    private var horizontalPadding: CGFloat {
+        switch layoutType {
+        case .smallStatusBar:
             return 16.scale
         case .iPad:
-            return max(20.scale, bottomSafeInset)
+            return 40.scale
         case .unknown:
-            return max(16.scale, bottomSafeInset)
+            return 20.scale
         case .notch, .dynamicIsland:
-            return max(12.scale, bottomSafeInset)
+            return 24.scale
+        }
+    }
+
+    private var buttonTopPadding: CGFloat {
+        switch layoutType {
+        case .smallStatusBar:
+            return 22.scale
+        case .iPad:
+            return 28.scale
+        case .unknown:
+            return 24.scale
+        case .notch, .dynamicIsland:
+            return 26.scale
+        }
+    }
+
+    private var footerTopPadding: CGFloat {
+        switch layoutType {
+        case .smallStatusBar:
+            return 16.scale
+        case .iPad:
+            return 18.scale
+        case .unknown:
+            return 16.scale
+        case .notch, .dynamicIsland:
+            return 18.scale
         }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 4.scale) {
-                ForEach(0..<pageCount, id: \.self) { index in
-                    Capsule()
-                        .fill(Tokens.Color.accent.opacity(index <= currentIndex ? 1.0 : 0.2))
-                        .frame(width: 24.scale, height: 4.scale)
-                }
-            }
-            .padding(.top, topIndicatorPadding)
-
             Text(title)
-                .font(Tokens.Font.outfitBold28)
-                .kerning(-0.28.scale)
-                .foregroundStyle(Color(hex: "141414") ?? .black)
+                .font(Tokens.Font.onboardingTitle20)
+                .foregroundStyle(Tokens.Color.onboardingTitle)
+                .lineSpacing(2.scale)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 20.scale)
+                .padding(.horizontal, horizontalPadding)
+
+            Text(subtitle)
+                .font(Tokens.Font.onboardingBody16)
+                .foregroundStyle(Tokens.Color.onboardingSubtitle)
                 .lineSpacing(4.scale)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 16.scale)
-
-            Text(subtitle)
-                .font(Tokens.Font.regular16)
-                .kerning(0.16.scale)
-                .foregroundStyle(Color(hex: "141414")?.opacity(0.86) ?? Color.black.opacity(0.86))
-                .lineSpacing(8.scale)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 12.scale)
-                .padding(.horizontal, 16.scale)
+                .padding(.horizontal, horizontalPadding)
 
             Button(action: onPrimaryTap) {
                 ZStack {
@@ -101,55 +114,51 @@ struct OnboardingBottomCardView: View {
                             .tint(.white)
                     }
                 }
-                .font(Tokens.Font.semibold17)
-                .kerning(-0.17.scale)
+                .font(Tokens.Font.onboardingButton16)
                 .foregroundStyle(Color.white)
                 .frame(maxWidth: .infinity)
-                .frame(height: 52.scale)
-                .background(Tokens.Color.accent)
-                .cornerRadiusContinuous(16.scale)
+                .frame(height: 60.scale)
+                .background(Tokens.Color.onboardingContinueButton)
+                .cornerRadiusContinuous(24.scale)
             }
             .buttonStyle(.plain)
             .disabled(isPrimaryLoading)
-            .padding(.horizontal, 16.scale)
-            .padding(.top, 16.scale)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.top, buttonTopPadding)
 
-            HStack(spacing: 32.scale) {
-                Button(action: onOpenPrivacy) {
-                    Text("Privacy Policy")
-                }
-                Button(action: onRestoreTap) {
-                    Text("Restore")
-                }
-                Button(action: onOpenTerms) {
-                    Text("Terms of Use")
-                }
+            HStack(spacing: 0) {
+                footerButton(title: "Terms of Use", action: onOpenTerms)
+                footerSeparator
+                footerButton(title: "Restore", action: onRestoreTap)
+                footerSeparator
+                footerButton(title: "Privacy Policy", action: onOpenPrivacy)
             }
-            .font(Tokens.Font.regular13)
-            .kerning(0.13.scale)
-            .foregroundStyle(Color(hex: "14141499") ?? Color.black.opacity(0.6))
-            .padding(.top, layoutType == .smallStatusBar ? 6.scale : 8.scale)
-            .buttonStyle(.plain)
+            .padding(.top, footerTopPadding)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, horizontalPadding)
         }
         .padding(.bottom, contentBottomPadding)
         .frame(maxWidth: .infinity)
         .frame(minHeight: cardMinHeight, alignment: .top)
-        .background(Color.white)
-        .clipShape(
-            TopRoundedCornersShape(radius: 32.scale)
-        )
+        .background(Color.clear)
     }
 }
 
-private struct TopRoundedCornersShape: Shape {
-    let radius: CGFloat
+private extension OnboardingBottomCardView {
+    func footerButton(title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Tokens.Font.onboardingFooter13)
+                .foregroundStyle(Tokens.Color.onboardingFooter)
+                .lineLimit(1)
+        }
+        .buttonStyle(.plain)
+    }
 
-    func path(in rect: CGRect) -> Path {
-        let path = UIBezierPath(
-            roundedRect: rect,
-            byRoundingCorners: [.topLeft, .topRight],
-            cornerRadii: CGSize(width: radius, height: radius)
-        )
-        return Path(path.cgPath)
+    var footerSeparator: some View {
+        Text("|")
+            .font(Tokens.Font.onboardingFooter13)
+            .foregroundStyle(Tokens.Color.onboardingFooter)
+            .padding(.horizontal, 10.scale)
     }
 }

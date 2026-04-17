@@ -1,17 +1,15 @@
 import SwiftUI
 
 struct PaywallPlanRowView: View {
-
-    let product: BillingProduct
     let isPicked: Bool
 
     let planTitle: String
     let planSubtitle: String
     let planPriceText: String
-    let planSecondaryPriceText: String?
+    let badgeText: String?
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             RoundedRectangle(
                 cornerRadius: PaywallLayout.optionCorner,
                 style: .continuous
@@ -26,6 +24,8 @@ struct PaywallPlanRowView: View {
             )
 
             HStack(spacing: 12.scale) {
+                selectionBullet
+
                 VStack(alignment: .leading, spacing: 4.scale) {
                     Text(planTitle)
                         .font(Tokens.Font.semibold17)
@@ -33,30 +33,34 @@ struct PaywallPlanRowView: View {
                         .lineLimit(1)
 
                     Text(planSubtitle)
-                        .font(Tokens.Font.regular13)
+                        .font(Tokens.Font.medium14)
                         .foregroundStyle(subtitleStyle)
                         .lineLimit(1)
                 }
 
                 Spacer(minLength: 12.scale)
 
-                VStack(alignment: .trailing, spacing: 2.scale) {
-                    Text(planPriceText)
-                        .font(Tokens.Font.semibold17)
-                        .foregroundStyle(titleStyle)
-                        .lineLimit(1)
-
-                    if let planSecondaryPriceText {
-                        Text(planSecondaryPriceText)
-                            .font(Tokens.Font.regular13)
-                            .foregroundStyle(subtitleStyle)
-                            .lineLimit(1)
-                    }
-                }
+                Text(planPriceText)
+                    .font(Tokens.Font.semibold17)
+                    .foregroundStyle(titleStyle)
+                    .lineLimit(1)
             }
             .padding(.horizontal, 16.scale)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: PaywallLayout.productRowHeight)
+
+            if let badgeText {
+                Text(badgeText)
+                    .font(Tokens.Font.medium13)
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 10.scale)
+                    .frame(height: 26.scale)
+                    .background(
+                        Capsule()
+                            .fill(Tokens.Color.paywallSelectedOptionStroke)
+                    )
+                    .offset(x: -12.scale, y: -13.scale)
+            }
         }
         .frame(maxWidth: .infinity)
         .contentShape(
@@ -71,16 +75,16 @@ struct PaywallPlanRowView: View {
 
     private var backgroundStyle: AnyShapeStyle {
         if isPicked {
-            return AnyShapeStyle(Tokens.Color.accentGradient)
+            return AnyShapeStyle(Tokens.Color.paywallSelectedOptionFill)
         } else {
-            return AnyShapeStyle(Color(hex: "222E4A") ?? Color(red: 34/255, green: 46/255, blue: 74/255))
+            return AnyShapeStyle(Tokens.Color.paywallOptionFill)
         }
     }
 
     private var strokeStyle: AnyShapeStyle {
         isPicked
-        ? AnyShapeStyle(Color.white.opacity(0.95))
-        : AnyShapeStyle(Color.black.opacity(0.15))
+        ? AnyShapeStyle(Tokens.Color.paywallSelectedOptionStroke)
+        : AnyShapeStyle(Tokens.Color.paywallOptionStroke)
     }
 
     private var strokeLineWidth: CGFloat {
@@ -88,14 +92,29 @@ struct PaywallPlanRowView: View {
     }
 
     private var titleStyle: AnyShapeStyle {
-        isPicked
-        ? AnyShapeStyle(Color.white)
-        : AnyShapeStyle(Tokens.Color.textPrimary)
+        AnyShapeStyle(Tokens.Color.paywallPrimaryText)
     }
 
     private var subtitleStyle: AnyShapeStyle {
-        isPicked
-        ? AnyShapeStyle(Color.white.opacity(0.85))
-        : AnyShapeStyle(Tokens.Color.textSecondary)
+        AnyShapeStyle(Tokens.Color.paywallSecondaryText)
+    }
+
+    private var selectionBullet: some View {
+        ZStack {
+            if isPicked {
+                Circle()
+                    .fill(Tokens.Color.paywallSelectedOptionStroke)
+                    .frame(width: 24.scale, height: 24.scale)
+
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 8.scale, height: 8.scale)
+            } else {
+                Circle()
+                    .stroke(Tokens.Color.paywallPrimaryText.opacity(0.15), lineWidth: 1.5.scale)
+                    .frame(width: 24.scale, height: 24.scale)
+            }
+        }
+        .frame(width: 24.scale, height: 24.scale)
     }
 }
