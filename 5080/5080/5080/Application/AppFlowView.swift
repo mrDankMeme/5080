@@ -15,6 +15,7 @@ struct AppFlowView: View {
 }
 
 private struct AppFlowContentView: View {
+    @Environment(\.resolver) private var resolver
     @EnvironmentObject private var purchaseManager: PurchaseManager
 
     @AppStorage("OnBoardEnd") private var isOnboardingFinished: Bool = false
@@ -56,7 +57,9 @@ private struct AppFlowContentView: View {
                     isInitialPaywallCompleted = true
                 }
             } else {
-                RootTabView()
+                RootTabView(
+                    viewModel: resolver.resolve(RootTabViewModel.self)!
+                )
             }
         }
         .preferredColorScheme(isOnboardingFinished ? .light : nil)

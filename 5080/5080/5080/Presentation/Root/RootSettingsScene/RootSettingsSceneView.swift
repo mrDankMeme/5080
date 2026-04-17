@@ -190,7 +190,8 @@ struct RootSettingsSceneView: View {
                 .foregroundStyle(iconColor(for: row.style))
         } else if let systemIconName = row.systemIconName {
             Image(systemName: systemIconName)
-                .font(.system(size: 18.scale, weight: .medium))
+                .resizable()
+                .scaledToFit()
                 .frame(width: 20.scale, height: 20.scale)
                 .foregroundStyle(iconColor(for: row.style))
         }

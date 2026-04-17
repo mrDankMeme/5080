@@ -102,6 +102,24 @@ public enum Tokens {
                 endPoint: .trailing
             )
         }
+        public static var base44BrandOrange: SwiftUI.Color {
+            SwiftUI.Color(hex: "F3671B") ?? accent
+        }
+        public static var base44SkyBlue: SwiftUI.Color {
+            SwiftUI.Color(hex: "B8E4F8") ?? surfaceWhite
+        }
+        public static var base44WarmCream: SwiftUI.Color {
+            SwiftUI.Color(hex: "FFF3DF") ?? surfaceWhite
+        }
+        public static var base44SoftCard: SwiftUI.Color {
+            SwiftUI.Color(hex: "F4FBFF") ?? surfaceWhite
+        }
+        public static var base44PreviewBackground: SwiftUI.Color {
+            SwiftUI.Color(hex: "ECECEF") ?? cardSoftBackground
+        }
+        public static var base44Border: SwiftUI.Color {
+            SwiftUI.Color(hex: "1414140A") ?? inkPrimary.opacity(0.04)
+        }
     }
     
     
@@ -113,8 +131,10 @@ public enum Tokens {
         public static var heavy28: SwiftUI.Font { .custom("SFProDisplay-Heavy", size: 28.scale) }
         public static var bold18: SwiftUI.Font { .custom("SFProDisplay-Bold", size: 18.21.scale) }
         public static var bold28: SwiftUI.Font { .custom("SFProDisplay-Bold", size: 28.scale) }
+        public static var bold32: SwiftUI.Font { .custom("SFProDisplay-Bold", size: 32.scale) }
         public static var bold15: SwiftUI.Font { .custom("SFProDisplay-Bold", size: 15.scale) }
         public static var bold22: SwiftUI.Font { .custom("SFProDisplay-Bold", size: 22.scale) }
+        public static var bold24: SwiftUI.Font { .custom("SFProDisplay-Bold", size: 24.scale) }
 
         public static var semibold16: SwiftUI.Font { .custom("SFProText-Semibold", size: 16.scale) }
         public static var bold16: SwiftUI.Font { .custom("SFProText-Bold", size: 16.scale) }

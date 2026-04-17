@@ -214,6 +214,85 @@ final class ServicesAssembly: Assembly {
         }
         .inObjectScope(.transient)
 
+        container.register(SiteMakerAuthorizationProviding.self) { _ in
+            SiteMakerAuthorizationProvider()
+        }
+        .inObjectScope(.container)
+
+        container.register(SiteMakerRemoteServicing.self) { _ in
+            SiteMakerRemoteService()
+        }
+        .inObjectScope(.container)
+
+        container.register(SiteMakerRepositoryProtocol.self) { r in
+            DefaultSiteMakerRepository(
+                authorizationProvider: r.resolve(SiteMakerAuthorizationProviding.self)!,
+                remoteService: r.resolve(SiteMakerRemoteServicing.self)!
+            )
+        }
+        .inObjectScope(.container)
+
+        container.register(FetchSiteMakerProjectsUseCaseProtocol.self) { r in
+            DefaultFetchSiteMakerProjectsUseCase(
+                repository: r.resolve(SiteMakerRepositoryProtocol.self)!
+            )
+        }
+        .inObjectScope(.transient)
+
+        container.register(CreateSiteMakerProjectUseCaseProtocol.self) { r in
+            DefaultCreateSiteMakerProjectUseCase(
+                repository: r.resolve(SiteMakerRepositoryProtocol.self)!
+            )
+        }
+        .inObjectScope(.transient)
+
+        container.register(FetchSiteMakerProjectUseCaseProtocol.self) { r in
+            DefaultFetchSiteMakerProjectUseCase(
+                repository: r.resolve(SiteMakerRepositoryProtocol.self)!
+            )
+        }
+        .inObjectScope(.transient)
+
+        container.register(UploadSiteMakerAssetUseCaseProtocol.self) { r in
+            DefaultUploadSiteMakerAssetUseCase(
+                repository: r.resolve(SiteMakerRepositoryProtocol.self)!
+            )
+        }
+        .inObjectScope(.transient)
+
+        container.register(ClarifySiteMakerProjectUseCaseProtocol.self) { r in
+            DefaultClarifySiteMakerProjectUseCase(
+                repository: r.resolve(SiteMakerRepositoryProtocol.self)!
+            )
+        }
+        .inObjectScope(.transient)
+
+        container.register(GenerateSiteMakerProjectUseCaseProtocol.self) { r in
+            DefaultGenerateSiteMakerProjectUseCase(
+                repository: r.resolve(SiteMakerRepositoryProtocol.self)!
+            )
+        }
+        .inObjectScope(.transient)
+
+        container.register(EditSiteMakerProjectUseCaseProtocol.self) { r in
+            DefaultEditSiteMakerProjectUseCase(
+                repository: r.resolve(SiteMakerRepositoryProtocol.self)!
+            )
+        }
+        .inObjectScope(.transient)
+
+        container.register(BuilderWorkspaceSceneViewModelFactoryProtocol.self) { r in
+            DefaultBuilderWorkspaceSceneViewModelFactory(
+                createProjectUseCase: r.resolve(CreateSiteMakerProjectUseCaseProtocol.self)!,
+                fetchProjectUseCase: r.resolve(FetchSiteMakerProjectUseCaseProtocol.self)!,
+                uploadAssetUseCase: r.resolve(UploadSiteMakerAssetUseCaseProtocol.self)!,
+                clarifyProjectUseCase: r.resolve(ClarifySiteMakerProjectUseCaseProtocol.self)!,
+                generateProjectUseCase: r.resolve(GenerateSiteMakerProjectUseCaseProtocol.self)!,
+                editProjectUseCase: r.resolve(EditSiteMakerProjectUseCaseProtocol.self)!
+            )
+        }
+        .inObjectScope(.container)
+
         container.register(AppFlowViewModel.self) { r in
             AppFlowViewModel(
                 authorizeUserUseCase: r.resolve(AuthorizeUserUseCase.self)!,
@@ -524,6 +603,13 @@ final class ServicesAssembly: Assembly {
         }
         .inObjectScope(.container)
 
+        container.register(Base44HomeSceneViewModel.self) { r in
+            Base44HomeSceneViewModel(
+                fetchProjectsUseCase: r.resolve(FetchSiteMakerProjectsUseCaseProtocol.self)!
+            )
+        }
+        .inObjectScope(.container)
+
         container.register(RootSettingsSceneViewModel.self) { r in
             RootSettingsSceneViewModel(
                 purchaseManager: r.resolve(PurchaseManager.self)!,
@@ -548,10 +634,10 @@ final class ServicesAssembly: Assembly {
 
         container.register(RootTabViewModel.self) { r in
             RootTabViewModel(
-                homeViewModel: r.resolve(RootHomeSceneViewModel.self)!,
-                historyViewModel: r.resolve(RootHistorySceneViewModel.self)!,
+                homeViewModel: r.resolve(Base44HomeSceneViewModel.self)!,
                 settingsViewModel: r.resolve(RootSettingsSceneViewModel.self)!,
-                billingAccessResolver: r.resolve(BillingAccessResolving.self)!
+                billingAccessResolver: r.resolve(BillingAccessResolving.self)!,
+                builderViewModelFactory: r.resolve(BuilderWorkspaceSceneViewModelFactoryProtocol.self)!
             )
         }
         .inObjectScope(.container)
