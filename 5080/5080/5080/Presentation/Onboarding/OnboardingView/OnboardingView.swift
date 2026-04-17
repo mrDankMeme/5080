@@ -260,7 +260,6 @@ private extension OnboardingView {
         }
         .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
         .offset(x: -CGFloat(vm.currentIndex) * proxy.size.width)
-        .clipped()
         .ignoresSafeArea(.all)
         .allowsHitTesting(false)
         .animation(slideMovementAnimation, value: vm.currentIndex)
@@ -268,7 +267,9 @@ private extension OnboardingView {
 
     @ViewBuilder
     func onboardingSlideImageView(_ slide: OnboardingSlide) -> some View {
-        let resolvedScale = slide.scale.resolve(for: DeviceLayout.type)
+        let layoutType = DeviceLayout.type
+        let resolvedScale = slide.scale.resolve(for: layoutType)
+        let resolvedTopOffset = onboardingSlideImageTopOffset(for: slide.id, layoutType: layoutType)
         Image(slide.imageName)
             .resizable()
             .scaledToFit()
@@ -276,7 +277,22 @@ private extension OnboardingView {
                 width: slide.imageWidth * resolvedScale.x,
                 height: slide.imageHeight * resolvedScale.y
             )
-            .padding(.top, slide.imageTopOffset)
+            .padding(.top, resolvedTopOffset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    func onboardingSlideImageTopOffset(for slideID: Int, layoutType: DeviceLayoutType) -> CGFloat {
+        let isIpad = layoutType == .iPad || layoutType == .unknown || layoutType == .smallStatusBar
+
+        switch slideID {
+        case 0:
+            return isIpad ? 0.scale : 0.scale
+        case 1:
+            return isIpad ? -30.scale : -50.scale
+        case 2:
+            return isIpad ? -30.scale : -58.scale
+        default:
+            return 0.scale
+        }
     }
 }

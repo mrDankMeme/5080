@@ -136,7 +136,7 @@ public struct DefaultOnboardingContentProvider: OnboardingContentProviding {
 
 private extension DefaultOnboardingContentProvider {
     static func makeSlides() -> [OnboardingSlide] {
-        let isIpad = DeviceLayout.isPad || DeviceLayout.isUnknown || DeviceLayout.isSmallStatusBarPhone
+       
 
         return [
             .init(
