@@ -14,7 +14,7 @@ workflows:
 
       vars:
         BUNDLE_ID: "com.arn.5080base44"
-        XCODE_PROJECT: "5080/5080.xcodeproj"
+        XCODE_PROJECT: "5080/5080/5080.xcodeproj"
         XCODE_SCHEME: "5080"
         APP_STORE_APPLE_ID: 6762474175
 
