@@ -5,18 +5,18 @@ workflows:
     instance_type: mac_mini_m1
 
     integrations:
-      app_store_connect: 5043app
+      app_store_connect: app5080v2
 
     environment:
       ios_signing:
         distribution_type: app_store
-        bundle_identifier: com.nat.5043minimax
+        bundle_identifier: com.arn.5080base44
 
       vars:
-        BUNDLE_ID: "com.nat.5043minimax"
+        BUNDLE_ID: "com.arn.5080base44"
         XCODE_PROJECT: "5080/5080.xcodeproj"
         XCODE_SCHEME: "5080"
-        APP_STORE_APPLE_ID: 6760103981
+        APP_STORE_APPLE_ID: 6762474175
 
       xcode: 26.2
 
@@ -54,7 +54,7 @@ workflows:
     publishing:
       email:
         recipients:
-          - dete8489@gmail.com
+          - hassan_emily8936@aol.com
         notify:
           success: true
           failure: true

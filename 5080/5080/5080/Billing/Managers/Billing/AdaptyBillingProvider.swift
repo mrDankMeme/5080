@@ -267,10 +267,12 @@ private extension AdaptyBillingProvider {
             }
         }
 
+        #if DEBUG
         if let localStoreKitPaywall = await loadLocalStoreKitTokenPaywall() {
             logger.info("AdaptyBillingProvider: Falling back to local StoreKit token products")
             return localStoreKitPaywall
         }
+        #endif
 
         logger.warning("AdaptyBillingProvider: Token products were not found in any configured placement")
         return nil
