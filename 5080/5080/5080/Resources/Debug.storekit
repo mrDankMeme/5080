@@ -88,36 +88,6 @@
       "productID" : "2000_tokens_99.99",
       "referenceName" : "2000 Tokens 99.99",
       "type" : "Consumable"
-    },
-    {
-      "displayPrice" : "39.99",
-      "familyShareable" : false,
-      "internalID" : "CDDBAEB3",
-      "localizations" : [
-        {
-          "description" : "",
-          "displayName" : "",
-          "locale" : "en_US"
-        }
-      ],
-      "productID" : "1_avatar_39.99",
-      "referenceName" : "1 avatar 39.99",
-      "type" : "Consumable"
-    },
-    {
-      "displayPrice" : "69.99",
-      "familyShareable" : false,
-      "internalID" : "2C6236B6",
-      "localizations" : [
-        {
-          "description" : "",
-          "displayName" : "",
-          "locale" : "en_US"
-        }
-      ],
-      "productID" : "2_avatar_69.99",
-      "referenceName" : "2 avatar 69.99",
-      "type" : "Consumable"
     }
   ],
   "settings" : {
