@@ -122,54 +122,50 @@ private extension BuilderWorkspaceSceneView {
 
     var chatPane: some View {
         VStack(spacing: 0.scale) {
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 16.scale) {
-                    statusCard
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 16.scale) {
+                        statusCard
 
-                    if !viewModel.canDismiss {
-                        backLockedBanner
-                    }
-
-                    if viewModel.hasPrompt {
-                        promptBubble
-                    }
-
-                    if viewModel.shouldShowClarifyQuestions {
-                        ForEach(viewModel.questions) { question in
-                            questionCard(question)
+                        if !viewModel.canDismiss {
+                            backLockedBanner
                         }
 
-                        generateButton
+                        if viewModel.hasPrompt {
+                            promptBubble
+                        }
+
+                        if viewModel.shouldShowClarifyQuestions {
+                            ForEach(viewModel.questions) { question in
+                                questionCard(question)
+                            }
+
+                            generateButton
+                        }
+
+                        Color.clear
+                            .frame(height: 1.scale)
+                            .id("builder_chat_bottom")
+                    }
+                    .padding(.horizontal, 16.scale)
+                    .padding(.bottom, 24.scale)
+                }
+                .onChange(of: viewModel.shouldShowClarifyQuestions) { oldValue, newValue in
+                    guard !oldValue, newValue else { return }
+
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            proxy.scrollTo("builder_chat_bottom", anchor: .bottom)
+                        }
                     }
                 }
-                .padding(.horizontal, 16.scale)
-                .padding(.bottom, 24.scale)
             }
 
-            if !viewModel.uploadedAssets.isEmpty {
-                UploadedAssetsStripView(assets: viewModel.uploadedAssets)
-                    .padding(.horizontal, 24.scale)
-                    .padding(.bottom, 8.scale)
-            }
-
-            if !viewModel.pendingAttachments.isEmpty {
-                PendingAttachmentsStripView(
-                    attachments: viewModel.pendingAttachments,
-                    onRemove: { attachment in
-                        viewModel.removePendingAttachment(id: attachment.id)
-                    }
-                )
-                .padding(.horizontal, 24.scale)
-                .padding(.bottom, 8.scale)
-            }
-
-            if viewModel.isBusy {
+            if viewModel.isGenerationLikeOperationRunning {
                 busyBanner
                     .padding(.horizontal, 24.scale)
                     .padding(.bottom, 8.scale)
             }
-
-            composerBar
         }
     }
 
@@ -526,7 +522,7 @@ private extension BuilderWorkspaceSceneView {
                     .font(Tokens.Font.semibold13)
                     .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.80))
 
-                Text("You can go back now. Reopen this project anytime to continue.")
+                Text("Generation is in progress (usually around 5 minutes). Please wait and reopen this project to check whether the result is ready.")
                     .font(Tokens.Font.regular12)
                     .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.58))
             }

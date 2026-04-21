@@ -37,27 +37,20 @@ struct Base44ProjectRowView: View {
                         .foregroundStyle(Tokens.Color.textSecondary)
                         .lineLimit(1)
 
-                    HStack(spacing: 8.scale) {
-                        HStack(spacing: 4.scale) {
-                            if isInProgress {
-                                Image(systemName: "sparkles")
-                                    .font(.system(size: 10.scale, weight: .semibold))
-                            }
-
-                            Text(isInProgress ? "In Progress" : project.statusTitle)
-                                .font(Tokens.Font.semibold11)
+                    HStack(spacing: 4.scale) {
+                        if isInProgress {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 10.scale, weight: .semibold))
                         }
-                        .foregroundStyle(Tokens.Color.base44BrandOrange)
-                        .padding(.horizontal, 9.scale)
-                        .frame(height: 24.scale)
-                        .background(Tokens.Color.base44BrandOrange.opacity(0.12))
-                        .clipShape(Capsule())
 
-                        Text(project.updatedAtLabel)
-                            .font(Tokens.Font.regular13)
-                            .foregroundStyle(Tokens.Color.textSecondary)
-                            .lineLimit(1)
+                        Text(isInProgress ? "In Progress" : project.statusTitle)
+                            .font(Tokens.Font.semibold11)
                     }
+                    .foregroundStyle(Tokens.Color.base44BrandOrange)
+                    .padding(.horizontal, 9.scale)
+                    .frame(height: 24.scale)
+                    .background(Tokens.Color.base44BrandOrange.opacity(0.12))
+                    .clipShape(Capsule())
                 }
 
                 Spacer(minLength: 8.scale)
@@ -138,13 +131,4 @@ private extension SiteMakerProjectSummary {
         }
     }
 
-    var updatedAtLabel: String {
-        guard let date = ISO8601DateFormatter.withFractionalSeconds.date(from: updatedAt) else {
-            return "Recently updated"
-        }
-
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        return formatter.localizedString(for: date, relativeTo: Date())
-    }
 }
