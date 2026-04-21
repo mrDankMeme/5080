@@ -1,11 +1,11 @@
 
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src *; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://telegram.org https://widget.cloudpayments.ru">
-  <title>Оплата</title>
+  <title>Payment</title>
   <script src="https://telegram.org/js/telegram-web-app.js?57"></script>
   <script src="https://widget.cloudpayments.ru/bundles/cloudpayments.js"></script>
 </head>
@@ -21,7 +21,7 @@
         var receipt = {
             Items: [
                  {
-                    label: 'Оплата покупки', 
+                    label: 'Purchase', 
                     price: price, 
                     quantity: 1.00, 
                     amount: price, 
@@ -44,11 +44,11 @@
       var data = {appBundle: 'com.zaf.5026vide0'};
 
         var widget = new cp.CloudPayments({
-            language: "ru-RU"
+            language: "en-US"
         })
       widget.start({ 
           publicTerminalId: 'pk_b37e81f92e1c6a64892ab054d78b3', 
-          description: 'Оплата', 
+          description: 'Payment', 
           paymentSchema: 'Single',
           amount: price, 
           currency: 'RUB', 

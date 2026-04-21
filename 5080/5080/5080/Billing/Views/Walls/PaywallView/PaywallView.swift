@@ -352,17 +352,16 @@ struct PaywallView: View {
         }
 
         let ok = await purchaseManager.restoreAny()
-        let isRussianUI = Locale.current.language.languageCode?.identifier == "ru"
 
-        alertTitle = isRussianUI ? "Восстановление покупок" : "Restore Purchases"
+        alertTitle = "Restore Purchases"
         if ok {
-            alertMessage = isRussianUI ? "Покупки успешно восстановлены" : "Purchases restored successfully"
+            alertMessage = "Purchases restored successfully"
             closeAfterAlert = true
             showAlert = true
             return
         }
 
-        alertMessage = restoreFailureMessage(isRussianUI: isRussianUI)
+        alertMessage = restoreFailureMessage()
         closeAfterAlert = false
         showAlert = true
     }
@@ -376,12 +375,9 @@ struct PaywallView: View {
     }
 
     @MainActor
-    private func restoreFailureMessage(isRussianUI: Bool) -> String {
-        let alreadyActiveSuffix = isRussianUI
-        ? "Подписка уже активна и работает в приложении."
-        : "Your subscription is already active and available in the app."
-
-        let defaultNothing = isRussianUI ? "Нечего восстанавливать" : "Nothing to restore"
+    private func restoreFailureMessage() -> String {
+        let alreadyActiveSuffix = "Your subscription is already active and available in the app."
+        let defaultNothing = "Nothing to restore"
         let raw = (purchaseManager.failRestoreText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
         if purchaseManager.isSubscribed {

@@ -15,7 +15,7 @@ enum DeviceLayoutType {
 
 struct DeviceLayout {
     
-    // MARK: - Публичные шорткаты
+    // MARK: - Public shortcuts
     
     static var type: DeviceLayoutType {
         current()
@@ -77,13 +77,13 @@ struct DeviceLayout {
             return .dynamicIsland
         }
         
-        // MARK: Обычный notch (iPhone X → 13, 14/15 non-Pro)
+        // MARK: Standard notch (iPhone X -> 13, 14/15 non-Pro)
        
         if top >= 44, bottom > 0 {
             return .notch
         }
         
-        // MARK: Маленький статус-бар (iPhone 7 / 8 / SE и подобные)
+        // MARK: Small status bar (iPhone 7 / 8 / SE and similar)
       
         if top <= 20, bottom == 0 {
             return .smallStatusBar

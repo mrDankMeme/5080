@@ -51,16 +51,16 @@ final class WeeklyOnboardingNotificationsScheduler: OnboardingNotificationsSched
 
     private let promptCopies: [PromptCopy] = [
         PromptCopy(
-            title: "Идея для вашего шедевра 💡",
-            body: "«Киберпанк город под дождем» — введите этот запрос и посмотрите, что получится!"
+            title: "An idea for your next masterpiece 💡",
+            body: "\"Cyberpunk city in the rain\" - enter this prompt and see what happens!"
         ),
         PromptCopy(
-            title: "Вы знали, что можно... 🤔",
-            body: "...загружать свои фото и анимировать их? Тестировать функцию →"
+            title: "Did you know you can... 🤔",
+            body: "...upload your own photos and animate them? Give it a try ->"
         ),
         PromptCopy(
-            title: "Нужен контент для соцсетей? 📱",
-            body: "Генерируйте уникальные обложки и сторис в один клик."
+            title: "Need content for social media? 📱",
+            body: "Generate unique covers and stories in one tap."
         )
     ]
 

@@ -32,7 +32,7 @@ public final class OnboardingViewModel: ObservableObject {
     }
 
     func advance() async {
-        let lastIndex = slides.count // следующий экран после слайдов — paywall
+        let lastIndex = slides.count // The next screen after the slides is the paywall.
         guard currentIndex < lastIndex else { return }
 
         if slides[currentIndex].requestsSystemReviewPrompt {

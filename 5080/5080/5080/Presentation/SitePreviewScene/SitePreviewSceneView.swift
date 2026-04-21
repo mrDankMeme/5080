@@ -5,6 +5,9 @@ struct SitePreviewSceneView: View {
 
     @ObservedObject var viewModel: SitePreviewSceneViewModel
     @State private var isPreviewLoading = true
+    @State private var previewProgress = 0.0
+    @State private var isPreviewProgressVisible = false
+    @State private var progressBarHideTask: Task<Void, Never>?
 
     var body: some View {
         GeometryReader { proxy in
@@ -23,6 +26,9 @@ struct SitePreviewSceneView: View {
                 alignment: .top
             )
             .background(backgroundView.ignoresSafeArea())
+        }
+        .onDisappear {
+            progressBarHideTask?.cancel()
         }
     }
 }
@@ -152,14 +158,25 @@ private extension SitePreviewSceneView {
     }
 
     var previewCard: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
             SitePreviewWebView(
                 url: viewModel.previewURL,
                 reloadKey: viewModel.previewReloadKey,
                 onLoadingChanged: { isLoading in
-                    if isPreviewLoading != isLoading {
-                        isPreviewLoading = isLoading
+                    if isLoading {
+                        progressBarHideTask?.cancel()
+                        progressBarHideTask = nil
+                        if !isPreviewLoading {
+                            isPreviewLoading = true
+                        }
+                    } else if previewProgress >= 1.0 || previewProgress <= 0.0 {
+                        if isPreviewLoading {
+                            isPreviewLoading = false
+                        }
                     }
+                },
+                onProgressChanged: { progress in
+                    updatePreviewProgress(progress)
                 }
             )
 
@@ -169,7 +186,7 @@ private extension SitePreviewSceneView {
                         .tint(Tokens.Color.base44BrandOrange)
                         .scaleEffect(1.05)
 
-                    Text("Готовый сайт загружается, подождите немножко.")
+                    Text("Your live website is loading. Please wait a moment.")
                         .font(Tokens.Font.medium15)
                         .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.66))
                         .multilineTextAlignment(.center)
@@ -177,6 +194,11 @@ private extension SitePreviewSceneView {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Tokens.Color.surfaceWhite.opacity(0.96))
+            }
+
+            if isPreviewProgressVisible {
+                previewProgressBar
+                    .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -186,5 +208,60 @@ private extension SitePreviewSceneView {
                 .stroke(Tokens.Color.base44Border, lineWidth: 1.scale)
         }
         .shadow(color: Tokens.Color.inkPrimary.opacity(0.08), radius: 20.scale, y: 10.scale)
+    }
+
+    var previewProgressBar: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Tokens.Color.inkPrimary.opacity(0.08))
+
+                Capsule()
+                    .fill(Tokens.Color.base44BrandOrange)
+                    .frame(width: max(8.scale, proxy.size.width * previewProgress))
+            }
+        }
+        .frame(height: 3.scale)
+        .padding(.horizontal, 14.scale)
+        .padding(.bottom, 12.scale)
+        .allowsHitTesting(false)
+        .animation(.easeOut(duration: 0.16), value: previewProgress)
+    }
+
+    func updatePreviewProgress(_ rawProgress: Double) {
+        let clampedProgress = min(max(rawProgress, 0.0), 1.0)
+
+        progressBarHideTask?.cancel()
+        progressBarHideTask = nil
+
+        guard clampedProgress > 0 else {
+            previewProgress = 0.0
+            isPreviewProgressVisible = false
+            return
+        }
+
+        previewProgress = clampedProgress
+        isPreviewProgressVisible = true
+
+        guard clampedProgress >= 1.0 else {
+            if !isPreviewLoading {
+                isPreviewLoading = true
+            }
+            return
+        }
+
+        if isPreviewLoading {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                isPreviewLoading = false
+            }
+        }
+
+        progressBarHideTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.18)) {
+                isPreviewProgressVisible = false
+            }
+        }
     }
 }

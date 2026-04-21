@@ -173,27 +173,21 @@ private extension OnboardingView {
 
         Analytics.shared.track("onboarding_restore_tap_appstore")
 
-        let isRussianUI = Locale.current.language.languageCode?.identifier == "ru"
         let ok = await purchaseManager.restoreAny()
-        restoreAlertTitle = isRussianUI ? "Восстановление покупок" : "Restore Purchases"
+        restoreAlertTitle = "Restore Purchases"
 
         if ok {
-            restoreAlertText = isRussianUI
-            ? "Покупки успешно восстановлены"
-            : "Purchases restored successfully"
+            restoreAlertText = "Purchases restored successfully"
             return
         }
 
-        restoreAlertText = restoreFailureMessage(isRussianUI: isRussianUI)
+        restoreAlertText = restoreFailureMessage()
     }
 
     @MainActor
-    func restoreFailureMessage(isRussianUI: Bool) -> String {
-        let alreadyActiveSuffix = isRussianUI
-        ? "Подписка уже активна и работает в приложении."
-        : "Your subscription is already active and available in the app."
-
-        let defaultNothing = isRussianUI ? "Нечего восстанавливать" : "Nothing to restore"
+    func restoreFailureMessage() -> String {
+        let alreadyActiveSuffix = "Your subscription is already active and available in the app."
+        let defaultNothing = "Nothing to restore"
         let raw = (purchaseManager.failRestoreText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
         if purchaseManager.isSubscribed {

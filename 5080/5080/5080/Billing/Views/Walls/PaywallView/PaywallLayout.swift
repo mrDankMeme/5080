@@ -4,17 +4,17 @@ import SwiftUI
 
 enum PaywallLayout {
 
-    // MARK: - Close button (как в API Paywall)
+    // MARK: - Close button (matches the API paywall)
 
     static let closeSize: CGFloat = 50.scale
     static let closeEdgeInset: CGFloat = 24.scale
 
-    // MARK: - Top asset (как в API Paywall)
+    // MARK: - Top asset (matches the API paywall)
 
     static let topAssetHorizontalInset: CGFloat = 44.scale
     static let topAssetGapFromClose: CGFloat = 49.scale
 
-    // MARK: - Bottom card (точно как в твоих метриках API)
+    // MARK: - Bottom card (matches the API metrics exactly)
 
     static let cardHorizontalInset: CGFloat = 24.scale
     static let bottomCardCorner: CGFloat = 26.scale

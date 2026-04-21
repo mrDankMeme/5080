@@ -1,7 +1,7 @@
 
 import UIKit
 
-// MARK: - ScreenScale (безопасный кеш коэффициента)
+// MARK: - ScreenScale (safe scale-ratio cache)
 enum ScreenScale {
     
     static var ratio: CGFloat = 1.0
@@ -33,12 +33,12 @@ enum ScreenScale {
     }
 }
 
-// MARK: - Протокол
+// MARK: - Protocol
 protocol Scalable {
     var scale: Self { get }
 }
 
-// MARK: - Базовые типы
+// MARK: - Base types
 
 extension CGFloat: Scalable {
     var scale: CGFloat { self * ScreenScale.ratio }

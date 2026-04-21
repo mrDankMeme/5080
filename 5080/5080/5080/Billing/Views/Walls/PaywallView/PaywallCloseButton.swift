@@ -17,7 +17,7 @@ struct PaywallCloseButton: View {
                 .contentShape(Rectangle())
         }
         .padding(.top, PaywallLayout.closeEdgeInset)
-        .padding(.trailing, 0) // у тебя в API сейчас так
+        .padding(.trailing, 0) // Matches the current API paywall spacing.
         .disabled(isDisabled)
         .opacity(isHidden ? 0.0 : 1.0)
         .accessibilityLabel("Close")
