@@ -32,7 +32,7 @@ final class SitePreviewSceneViewModel: ObservableObject, Identifiable {
     }
 
     var captionText: String {
-        "Open your published project inside the app and copy its web address anytime."
+        ""
     }
 
     var domainText: String {

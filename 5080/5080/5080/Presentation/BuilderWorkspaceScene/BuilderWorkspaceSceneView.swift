@@ -491,7 +491,7 @@ private extension BuilderWorkspaceSceneView {
                 .font(Tokens.Font.regular12)
                 .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.66))
 
-                Text("After that, you can go back while your website continues building in the background.")
+                Text("Then answer the clarifying questions and tap Generate to continue building your website.")
                     .font(Tokens.Font.regular12)
                     .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.66))
             }
@@ -512,10 +512,6 @@ private extension BuilderWorkspaceSceneView {
         HStack(spacing: 10.scale) {
             ProgressView()
                 .tint(Tokens.Color.base44BrandOrange)
-
-            Image(systemName: "sparkles")
-                .font(.system(size: 13.scale, weight: .semibold))
-                .foregroundStyle(Tokens.Color.base44BrandOrange.opacity(0.90))
 
             VStack(alignment: .leading, spacing: 2.scale) {
                 Text("Crafting your live website")

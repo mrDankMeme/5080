@@ -4,6 +4,7 @@ struct SitePreviewSceneView: View {
     @Environment(\.dismiss) private var dismiss
 
     @ObservedObject var viewModel: SitePreviewSceneViewModel
+    @State private var isPreviewLoading = true
 
     var body: some View {
         GeometryReader { proxy in
@@ -76,10 +77,12 @@ private extension SitePreviewSceneView {
                 .foregroundStyle(Tokens.Color.inkPrimary)
                 .multilineTextAlignment(.leading)
 
-            Text(viewModel.captionText)
-                .font(Tokens.Font.regular16)
-                .foregroundStyle(Tokens.Color.textSecondary)
-                .multilineTextAlignment(.leading)
+            if !viewModel.captionText.trimmed.isEmpty {
+                Text(viewModel.captionText)
+                    .font(Tokens.Font.regular16)
+                    .foregroundStyle(Tokens.Color.textSecondary)
+                    .multilineTextAlignment(.leading)
+            }
         }
     }
 
@@ -149,10 +152,33 @@ private extension SitePreviewSceneView {
     }
 
     var previewCard: some View {
-        SitePreviewWebView(
-            url: viewModel.previewURL,
-            reloadKey: viewModel.previewReloadKey
-        )
+        ZStack {
+            SitePreviewWebView(
+                url: viewModel.previewURL,
+                reloadKey: viewModel.previewReloadKey,
+                onLoadingChanged: { isLoading in
+                    if isPreviewLoading != isLoading {
+                        isPreviewLoading = isLoading
+                    }
+                }
+            )
+
+            if isPreviewLoading {
+                VStack(spacing: 12.scale) {
+                    ProgressView()
+                        .tint(Tokens.Color.base44BrandOrange)
+                        .scaleEffect(1.05)
+
+                    Text("Готовый сайт загружается, подождите немножко.")
+                        .font(Tokens.Font.medium15)
+                        .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.66))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24.scale)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Tokens.Color.surfaceWhite.opacity(0.96))
+            }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 28.scale, style: .continuous))
         .overlay {

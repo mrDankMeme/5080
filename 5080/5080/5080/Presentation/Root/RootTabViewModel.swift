@@ -118,6 +118,14 @@ final class RootTabViewModel: ObservableObject {
     }
 
     func openProject(_ project: SiteMakerProjectSummary) {
+        if project.shouldOpenPreviewDirectly {
+            if let previewViewModel = sitePreviewViewModelFactory.make(project: project) {
+                builderPresentation = nil
+                sitePreviewViewModel = previewViewModel
+                return
+            }
+        }
+
         if homeViewModel.isProjectBusy(project.id) {
             sitePreviewViewModel = nil
             builderPresentation = BuilderPresentationContext(launch: .existing(project: project))
@@ -167,5 +175,20 @@ final class RootTabViewModel: ObservableObject {
             isTokensPaywallPresented = true
             isSubscriptionPaywallPresented = false
         }
+    }
+}
+
+private extension SiteMakerProjectSummary {
+    var shouldOpenPreviewDirectly: Bool {
+        guard
+            status.trimmed.lowercased() == "live",
+            let previewURLString,
+            !previewURLString.trimmed.isEmpty,
+            URL(string: previewURLString) != nil
+        else {
+            return false
+        }
+
+        return true
     }
 }

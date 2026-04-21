@@ -101,11 +101,26 @@ final class Base44HomeSceneViewModel: ObservableObject {
     }
 
     func isProjectBusy(_ projectID: String) -> Bool {
-        if busyProjectIDs.contains(projectID) {
+        guard let project = projects.first(where: { $0.id == projectID }) else {
+            return busyProjectIDs.contains(projectID)
+        }
+
+        let normalizedStatus = project.status.trimmed.lowercased()
+        let hasPreviewURL = !(project.previewURLString?.trimmed.isEmpty ?? true)
+
+        if normalizedStatus == "live" && hasPreviewURL {
+            return false
+        }
+
+        if project.isServerTerminalStatus {
+            return false
+        }
+
+        if project.isServerGenerationInProgress {
             return true
         }
 
-        return projects.first(where: { $0.id == projectID })?.isServerGenerationInProgress == true
+        return busyProjectIDs.contains(projectID)
     }
 
     private var formattedCredits: String {
