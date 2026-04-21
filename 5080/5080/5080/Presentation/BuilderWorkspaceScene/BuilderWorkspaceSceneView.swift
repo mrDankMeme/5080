@@ -135,9 +135,13 @@ private extension BuilderWorkspaceSceneView {
                             promptBubble
                         }
 
-                        if viewModel.shouldShowClarifyQuestions {
-                            ForEach(viewModel.questions) { question in
-                                questionCard(question)
+                        if viewModel.shouldShowClarifyStep {
+                            if viewModel.hasQuestions {
+                                ForEach(viewModel.questions) { question in
+                                    questionCard(question)
+                                }
+                            } else {
+                                clarifyBriefCard
                             }
 
                             generateButton
@@ -150,7 +154,7 @@ private extension BuilderWorkspaceSceneView {
                     .padding(.horizontal, 16.scale)
                     .padding(.bottom, 24.scale)
                 }
-                .onChange(of: viewModel.shouldShowClarifyQuestions) { oldValue, newValue in
+                .onChange(of: viewModel.shouldShowClarifyStep) { oldValue, newValue in
                     guard !oldValue, newValue else { return }
 
                     DispatchQueue.main.async {
@@ -172,7 +176,9 @@ private extension BuilderWorkspaceSceneView {
     var statusCard: some View {
         VStack(alignment: .leading, spacing: 10.scale) {
             HStack(spacing: 10.scale) {
-                if viewModel.isBusy {
+                if viewModel.isUploadingAttachments || viewModel.activeOperationKind == .clarify {
+                    Base44DaisyLoader(size: 18.scale)
+                } else if viewModel.isBusy {
                     ProgressView()
                         .tint(Tokens.Color.base44BrandOrange)
                 }
@@ -204,6 +210,31 @@ private extension BuilderWorkspaceSceneView {
             RoundedRectangle(cornerRadius: 20.scale, style: .continuous)
                 .stroke(Tokens.Color.base44Border, lineWidth: 1.scale)
         }
+    }
+
+    var clarifyBriefCard: some View {
+        HStack(spacing: 0.scale) {
+            VStack(alignment: .leading, spacing: 10.scale) {
+                Text("Brief ready")
+                    .font(Tokens.Font.semibold18)
+                    .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.82))
+
+                Text(viewModel.briefDescription)
+                    .font(Tokens.Font.regular16)
+                    .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.74))
+                    .lineSpacing(4.scale)
+            }
+            .padding(18.scale)
+            .background(Tokens.Color.base44SoftCard.opacity(0.97))
+            .clipShape(RoundedRectangle(cornerRadius: 20.scale, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20.scale, style: .continuous)
+                    .stroke(Tokens.Color.base44Border, lineWidth: 1.scale)
+            }
+
+            Spacer(minLength: 52.scale)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     var promptBubble: some View {
@@ -474,10 +505,18 @@ private extension BuilderWorkspaceSceneView {
         let isPreparingClarify = viewModel.isBusy && viewModel.activeOperationKind == .clarify
 
         return HStack(alignment: .top, spacing: 10.scale) {
-            Image(systemName: isUploading ? "photo.on.rectangle.angled" : (isPreparingClarify ? "sparkles" : "checkmark.seal.fill"))
-                .font(.system(size: 14.scale, weight: .semibold))
-                .foregroundStyle(Tokens.Color.base44BrandOrange)
-                .padding(.top, 1.scale)
+            Group {
+                if isUploading {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 14.scale, weight: .semibold))
+                        .foregroundStyle(Tokens.Color.base44BrandOrange)
+                } else {
+                    Image(systemName: isPreparingClarify ? "sparkles" : "checkmark.seal.fill")
+                        .font(.system(size: 14.scale, weight: .semibold))
+                        .foregroundStyle(Tokens.Color.base44BrandOrange)
+                }
+            }
+            .padding(.top, 1.scale)
 
             VStack(alignment: .leading, spacing: 4.scale) {
                 Text(
@@ -565,5 +604,75 @@ private extension BuilderWorkspaceSceneView {
         .padding(.vertical, 8.scale)
         .background(Tokens.Color.surfaceWhite.opacity(0.75))
         .clipShape(RoundedRectangle(cornerRadius: 10.scale, style: .continuous))
+    }
+}
+
+struct Base44DaisyLoader: View {
+    let size: CGFloat
+
+    @State private var activePetal = 0
+    @State private var task: Task<Void, Never>?
+
+    private let petalCount = 10
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<petalCount, id: \.self) { index in
+                Capsule(style: .continuous)
+                    .fill(Tokens.Color.base44BrandOrange.opacity(petalOpacity(for: index)))
+                    .frame(
+                        width: max(2.scale, size * 0.12),
+                        height: max(6.scale, size * 0.34)
+                    )
+                    .offset(y: -(size * 0.27))
+                    .rotationEffect(.degrees((360.0 / Double(petalCount)) * Double(index)))
+            }
+        }
+        .frame(width: size, height: size)
+        .onAppear {
+            startLoop()
+        }
+        .onDisappear {
+            stopLoop()
+        }
+        .accessibilityLabel("Loading")
+    }
+
+    private func petalOpacity(for index: Int) -> Double {
+        let distance = (index - activePetal + petalCount) % petalCount
+
+        switch distance {
+        case 0:
+            return 1.0
+        case 1:
+            return 0.84
+        case 2:
+            return 0.68
+        case 3:
+            return 0.52
+        case 4:
+            return 0.38
+        default:
+            return 0.20
+        }
+    }
+
+    private func startLoop() {
+        stopLoop()
+
+        task = Task { @MainActor in
+            while !Task.isCancelled {
+                withAnimation(.linear(duration: 0.16)) {
+                    activePetal = (activePetal + 1) % petalCount
+                }
+
+                try? await Task.sleep(nanoseconds: 95_000_000)
+            }
+        }
+    }
+
+    private func stopLoop() {
+        task?.cancel()
+        task = nil
     }
 }

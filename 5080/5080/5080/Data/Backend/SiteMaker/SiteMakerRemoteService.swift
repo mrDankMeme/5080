@@ -347,7 +347,14 @@ private extension SiteMakerRemoteService {
             if let result = decode(SiteMakerClarifyResponse.self, from: rawValue) {
                 return .clarifyCompleted(result.toDomain())
             }
-            return .message(name: name, value: renderedValue)
+            return .clarifyCompleted(
+                SiteMakerClarifyResult(
+                    description: renderedValue.trimmed.nilIfEmpty ?? "Clarify complete.",
+                    suggestedTheme: "-",
+                    suggestedPalette: "-",
+                    questions: []
+                )
+            )
 
         case "spec_start":
             return .stageStarted(stage: .spec, message: renderedValue)
@@ -507,22 +514,17 @@ private extension SiteMakerRemoteService {
     }
 
     func decode<T: Decodable>(_ type: T.Type, from rawValue: String) -> T? {
-        guard let data = rawValue.data(using: .utf8) else {
-            return nil
+        for candidate in decodingCandidates(from: rawValue) {
+            guard let data = candidate.data(using: .utf8) else {
+                continue
+            }
+
+            if let value = try? decoder.decode(type, from: data) {
+                return value
+            }
         }
 
-        if let value = try? decoder.decode(type, from: data) {
-            return value
-        }
-
-        guard
-            let nestedJSONString = try? decoder.decode(String.self, from: data),
-            let nestedData = nestedJSONString.data(using: .utf8)
-        else {
-            return nil
-        }
-
-        return try? decoder.decode(type, from: nestedData)
+        return nil
     }
 
     func decodeStreamError(from rawValue: String) -> String {
@@ -560,6 +562,141 @@ private extension SiteMakerRemoteService {
         name
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+    }
+
+    func decodingCandidates(from rawValue: String) -> [String] {
+        var candidates: [String] = []
+
+        func appendCandidate(_ value: String?) {
+            guard let normalized = value?.trimmed.nilIfEmpty else {
+                return
+            }
+
+            guard !candidates.contains(normalized) else {
+                return
+            }
+
+            candidates.append(normalized)
+        }
+
+        let decodedString = decodedJSONStringLiteral(from: rawValue)
+        let strippedRawValue = strippingMarkdownCodeFence(from: rawValue)
+        let strippedDecodedString = strippingMarkdownCodeFence(from: decodedString)
+
+        appendCandidate(rawValue)
+        appendCandidate(strippedRawValue)
+        appendCandidate(extractFirstJSONObjectOrArray(from: rawValue))
+        appendCandidate(extractFirstJSONObjectOrArray(from: strippedRawValue))
+
+        appendCandidate(decodedString)
+        appendCandidate(strippedDecodedString)
+        appendCandidate(extractFirstJSONObjectOrArray(from: decodedString))
+        appendCandidate(extractFirstJSONObjectOrArray(from: strippedDecodedString))
+
+        return candidates
+    }
+
+    func decodedJSONStringLiteral(from rawValue: String) -> String? {
+        guard let data = rawValue.data(using: .utf8) else {
+            return nil
+        }
+
+        return try? decoder.decode(String.self, from: data)
+    }
+
+    func strippingMarkdownCodeFence(from value: String?) -> String? {
+        guard let trimmed = value?.trimmed, !trimmed.isEmpty else {
+            return nil
+        }
+
+        guard trimmed.hasPrefix("```") else {
+            return trimmed
+        }
+
+        var lines = trimmed.components(separatedBy: .newlines)
+        guard !lines.isEmpty else {
+            return trimmed
+        }
+
+        lines.removeFirst()
+
+        if let lastLine = lines.last,
+           lastLine.trimmingCharacters(in: .whitespacesAndNewlines) == "```" {
+            lines.removeLast()
+        }
+
+        return lines.joined(separator: "\n").trimmed
+    }
+
+    func extractFirstJSONObjectOrArray(from value: String?) -> String? {
+        guard let value = value?.trimmed, !value.isEmpty else {
+            return nil
+        }
+
+        var startIndex: String.Index?
+        var openingCharacter: Character?
+        var depth = 0
+        var isInsideString = false
+        var isEscaping = false
+
+        for index in value.indices {
+            let character = value[index]
+
+            if isEscaping {
+                isEscaping = false
+                continue
+            }
+
+            if character == "\\" && isInsideString {
+                isEscaping = true
+                continue
+            }
+
+            if character == "\"" {
+                isInsideString.toggle()
+                continue
+            }
+
+            if isInsideString {
+                continue
+            }
+
+            if depth == 0 {
+                if character == "{" || character == "[" {
+                    startIndex = index
+                    openingCharacter = character
+                    depth = 1
+                }
+                continue
+            }
+
+            if let openingCharacter, character == openingCharacter {
+                depth += 1
+                continue
+            }
+
+            if let closingCharacter = closingCharacter(for: openingCharacter),
+               character == closingCharacter {
+                depth -= 1
+
+                if depth == 0, let startIndex {
+                    return String(value[startIndex...index])
+                }
+            }
+        }
+
+        return nil
+    }
+
+    func closingCharacter(for openingCharacter: Character?) -> Character? {
+        switch openingCharacter {
+        case "{":
+            return "}"
+        case "[":
+            return "]"
+        default:
+            return nil
+        }
     }
 }
 

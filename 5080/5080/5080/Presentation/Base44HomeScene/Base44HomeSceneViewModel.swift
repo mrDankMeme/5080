@@ -40,6 +40,15 @@ final class Base44HomeSceneViewModel: ObservableObject {
         isSubscribed ? formattedCredits : "PRO"
     }
 
+    var hasBusyProjects: Bool {
+        guard !projects.isEmpty else { return false }
+
+        let listedProjectIDs = Set(projects.map(\.id))
+        let pendingListedProjectIDs = busyProjectIDs.intersection(listedProjectIDs)
+        return !pendingListedProjectIDs.isEmpty
+            || projects.contains(where: \.isServerGenerationInProgress)
+    }
+
     func loadProjectsIfNeeded() async {
         guard !didLoadProjects else { return }
         didLoadProjects = true
@@ -58,6 +67,8 @@ final class Base44HomeSceneViewModel: ObservableObject {
     }
 
     func refreshProjects() async {
+        guard !isLoadingProjects else { return }
+
         isLoadingProjects = true
         projectsErrorText = nil
 

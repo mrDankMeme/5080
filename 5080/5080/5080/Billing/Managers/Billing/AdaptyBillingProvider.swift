@@ -10,7 +10,7 @@ final class AdaptyBillingProvider: BillingProvider {
     }
 
     private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.arn.5080base44",
+        subsystem: Bundle.main.bundleIdentifier ?? "com.yev5080base44",
         category: "AdaptyBillingProvider"
     )
 

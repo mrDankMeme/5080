@@ -189,9 +189,8 @@ private extension Base44HomeSceneView {
                     .foregroundStyle(Tokens.Color.inkPrimary)
 
                 if viewModel.isLoadingProjects {
-                    LoaderDotsView()
-                        .scaleEffect(0.42)
-                        .frame(height: 12.scale)
+                    Base44DaisyLoader(size: 14.scale)
+                        .frame(width: 14.scale, height: 14.scale)
                 }
             }
 

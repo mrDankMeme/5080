@@ -12,6 +12,7 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
     @Published private(set) var briefDescription = ""
     @Published private(set) var suggestedTheme = ""
     @Published private(set) var suggestedPalette = ""
+    @Published private(set) var hasCompletedClarify = false
     @Published private(set) var projectID: String?
     @Published private(set) var projectSlug: String?
     @Published private(set) var projectStatus = "idle"
@@ -66,8 +67,8 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
         !questions.isEmpty
     }
 
-    var shouldShowClarifyQuestions: Bool {
-        hasQuestions && !isGenerationLikeOperationRunning
+    var shouldShowClarifyStep: Bool {
+        hasCompletedClarify && !isGenerationLikeOperationRunning
     }
 
     var hasPreview: Bool {
@@ -75,7 +76,7 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
     }
 
     var canGenerate: Bool {
-        !isBusy && hasQuestions && !briefDescription.isEmpty
+        !isBusy && hasCompletedClarify
     }
 
     var canDismiss: Bool {
@@ -157,7 +158,7 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
             return
         }
 
-        guard hasQuestions, !briefDescription.isEmpty else {
+        guard hasCompletedClarify else {
             handle(SiteMakerBuilderError.missingClarifyResult, fallback: "Generate failed.")
             return
         }
@@ -222,6 +223,7 @@ private extension BuilderWorkspaceSceneViewModel {
         promptText = project.description?.trimmed ?? project.name
         briefDescription = project.description?.trimmed ?? ""
         questions = []
+        hasCompletedClarify = false
 
         if let previewURLString = project.previewURLString,
            let url = URL(string: previewURLString) {
@@ -367,6 +369,7 @@ private extension BuilderWorkspaceSceneViewModel {
         briefDescription = ""
         suggestedTheme = ""
         suggestedPalette = ""
+        hasCompletedClarify = false
 
         BuilderPendingOperationStore.upsert(
             projectID: projectID,
@@ -785,6 +788,7 @@ private extension BuilderWorkspaceSceneViewModel {
             briefDescription = result.description
             suggestedTheme = result.suggestedTheme
             suggestedPalette = result.suggestedPalette
+            hasCompletedClarify = true
             let mappedQuestions = result.questions.map { question in
                 BuilderQuestionItem(
                     id: question.id,
@@ -798,7 +802,7 @@ private extension BuilderWorkspaceSceneViewModel {
             questions = mappedQuestions
             statusLine = "Clarify complete."
             detailLine = mappedQuestions.isEmpty
-                ? "Questions are taking longer than expected. Try reopening the project."
+                ? "Brief is ready. No extra questions were needed, so you can generate right away."
                 : "Pick options and tap Generate."
             latestStreamText = result.description
             isBackNavigationLocked = !mappedQuestions.isEmpty

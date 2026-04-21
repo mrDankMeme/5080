@@ -30,6 +30,29 @@ struct RootTabView: View {
         .task {
             await viewModel.loadHomeIfNeeded()
         }
+        .task(id: viewModel.homeViewModel.hasBusyProjects) {
+            guard viewModel.homeViewModel.hasBusyProjects else { return }
+
+            while viewModel.homeViewModel.hasBusyProjects {
+                do {
+                    try await Task.sleep(nanoseconds: 6_000_000_000)
+                } catch {
+                    break
+                }
+
+                guard
+                    viewModel.builderPresentation == nil,
+                    viewModel.sitePreviewViewModel == nil,
+                    !viewModel.isSettingsPresented,
+                    !viewModel.isSubscriptionPaywallPresented,
+                    !viewModel.isTokensPaywallPresented
+                else {
+                    continue
+                }
+
+                await viewModel.refreshProjects()
+            }
+        }
         .fullScreenCover(
             item: Binding(
                 get: { viewModel.builderPresentation },

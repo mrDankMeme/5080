@@ -5,9 +5,10 @@ import Adapty
 
 @MainActor
 final class PurchaseManager: ObservableObject {
-    private let billingProvider: BillingProvider = AdaptyBillingProvider()
+    private let billingProvider: BillingProvider
+    private let backendService: MiniMaxBackendService
 
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.arn.5080base44", category: "PurchaseManager")
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.yev5080base44", category: "PurchaseManager")
 
     enum PurchaseState: Equatable {
         case idle
@@ -62,6 +63,10 @@ final class PurchaseManager: ObservableObject {
     static let shared = PurchaseManager()
 
     private init() {
+        let billingProvider = AdaptyBillingProvider()
+        self.billingProvider = billingProvider
+        self.backendService = Self.makeBackendService()
+
         logger.info("PurchaseManager: Initializing billing manager")
         purchaseState = .loading
         self.userId = billingProvider.userID()
@@ -177,9 +182,27 @@ final class PurchaseManager: ObservableObject {
                 logger.info("PurchaseManager: Purchase successful for product \(product.id)")
                 if product.kind != .subscription,
                    let purchasedTokens = tokenAmount(from: product.id) {
-                    availableGenerations = max(0, availableGenerations) + purchasedTokens
+                    let optimisticBalance = max(0, availableGenerations) + purchasedTokens
+                    availableGenerations = optimisticBalance
                     logger.info(
                         "PurchaseManager: Applied local token credit \(purchasedTokens) for product \(product.id)"
+                    )
+
+                    if let syncedBalance = await syncPurchasedTokensWithBackendIfNeeded(
+                        expectedMinimumTokens: optimisticBalance
+                    ) {
+                        availableGenerations = max(optimisticBalance, syncedBalance)
+                        logger.info(
+                            "PurchaseManager: Synced token balance from backend after purchase. local=\(optimisticBalance), backend=\(syncedBalance)"
+                        )
+                    } else {
+                        logger.warning(
+                            "PurchaseManager: Backend token sync did not return a balance after purchase. Keeping local balance=\(optimisticBalance)"
+                        )
+                    }
+                } else if product.kind != .subscription {
+                    logger.warning(
+                        "PurchaseManager: Token product purchased but token amount could not be parsed from product id \(product.id)"
                     )
                 }
                 self.purchaseState = .ready
@@ -274,6 +297,18 @@ final class PurchaseManager: ObservableObject {
 }
 
 private extension PurchaseManager {
+    static func makeBackendService() -> MiniMaxBackendService {
+        let config = APIConfig(
+            baseURL: URL(string: MiniMaxBackendDefaults.baseURLString)!,
+            bearerToken: MiniMaxBackendDefaults.bearerToken
+        )
+
+        return MiniMaxBackendServiceImpl(
+            config: config,
+            http: URLSessionHTTPClient()
+        )
+    }
+
     var allAvailableProducts: [BillingProduct] {
         products + tokenProducts
     }
@@ -345,6 +380,51 @@ private extension PurchaseManager {
             return nil
         }
         return Int(firstNumericChunk)
+    }
+
+    func syncPurchasedTokensWithBackendIfNeeded(expectedMinimumTokens: Int) async -> Int? {
+        let resolvedUserID = resolveUnifiedUserID()
+        guard !resolvedUserID.isEmpty else {
+            logger.error("PurchaseManager: Unable to sync tokens — resolved userId is empty")
+            return nil
+        }
+
+        do {
+            try await backendService.collectTokens(userId: resolvedUserID)
+            logger.info(
+                "PurchaseManager: collectTokens request sent for userId \(resolvedUserID, privacy: .public)"
+            )
+        } catch {
+            logger.error(
+                "PurchaseManager: collectTokens failed for userId \(resolvedUserID, privacy: .public) - \(error.localizedDescription, privacy: .public)"
+            )
+        }
+
+        let maxAttempts = 6
+        for attempt in 1...maxAttempts {
+            do {
+                let profile = try await backendService.fetchProfile(userId: resolvedUserID)
+                let backendBalance = max(0, profile.availableGenerations)
+
+                if backendBalance >= expectedMinimumTokens || attempt == maxAttempts {
+                    logger.info(
+                        "PurchaseManager: Backend token balance fetched on attempt \(attempt). expectedMin=\(expectedMinimumTokens), backend=\(backendBalance)"
+                    )
+                    return backendBalance
+                }
+            } catch {
+                logger.error(
+                    "PurchaseManager: Failed to fetch profile during post-purchase sync (attempt \(attempt)) - \(error.localizedDescription, privacy: .public)"
+                )
+                if attempt == maxAttempts {
+                    return nil
+                }
+            }
+
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+
+        return nil
     }
 }
 
