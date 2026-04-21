@@ -137,6 +137,66 @@ struct SiteMakerClarifyResponse: Decodable {
     let suggested_palette: String
     let questions: [SiteMakerClarifyQuestionResponse]
 
+    private enum CodingKeys: String, CodingKey {
+        case description
+        case suggested_theme
+        case suggestedTheme
+        case suggested_palette
+        case suggestedPalette
+        case questions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        let rawDescription = (
+            try container.decodeIfPresent(String.self, forKey: .description)
+        )?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let rawSuggestedTheme = (
+            try container.decodeIfPresent(String.self, forKey: .suggested_theme)
+            ?? container.decodeIfPresent(String.self, forKey: .suggestedTheme)
+        )?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let rawSuggestedPalette = (
+            try container.decodeIfPresent(String.self, forKey: .suggested_palette)
+            ?? container.decodeIfPresent(String.self, forKey: .suggestedPalette)
+        )?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let decodedQuestions = try container.decodeIfPresent(
+            [SiteMakerClarifyQuestionResponse].self,
+            forKey: .questions
+        )
+        let fallbackDecodedQuestions: [SiteMakerClarifyQuestionResponse]? = {
+            guard let rawQuestionsJSONString = try? container.decodeIfPresent(
+                String.self,
+                forKey: .questions
+            ) else {
+                return nil
+            }
+
+            guard let data = rawQuestionsJSONString.data(using: .utf8) else {
+                return nil
+            }
+
+            return try? JSONDecoder().decode(
+                [SiteMakerClarifyQuestionResponse].self,
+                from: data
+            )
+        }()
+
+        self.description = (rawDescription?.isEmpty == false)
+            ? rawDescription!
+            : "Clarify complete."
+        self.suggested_theme = (rawSuggestedTheme?.isEmpty == false)
+            ? rawSuggestedTheme!
+            : "-"
+        self.suggested_palette = (rawSuggestedPalette?.isEmpty == false)
+            ? rawSuggestedPalette!
+            : "-"
+        self.questions = decodedQuestions ?? fallbackDecodedQuestions ?? []
+    }
+
     func toDomain() -> SiteMakerClarifyResult {
         SiteMakerClarifyResult(
             description: description,
@@ -153,6 +213,53 @@ struct SiteMakerClarifyQuestionResponse: Decodable {
     let options: [String]
     let `default`: Int
 
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case question
+        case title
+        case prompt
+        case options
+        case choices
+        case `default`
+        case default_index
+        case defaultIndex
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        let parsedID = Self.decodeLossyString(
+            from: container,
+            keys: [.id]
+        ) ?? UUID().uuidString
+
+        let parsedQuestion = Self.decodeLossyString(
+            from: container,
+            keys: [.question, .title, .prompt]
+        ) ?? "Choose an option"
+
+        let parsedOptions = Self.decodeLossyStringArray(
+            from: container,
+            keys: [.options, .choices]
+        )
+        let cleanOptions = parsedOptions
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let resolvedOptions = cleanOptions.isEmpty ? ["Continue"] : cleanOptions
+
+        let rawDefault = Self.decodeLossyInt(
+            from: container,
+            keys: [.default, .default_index, .defaultIndex]
+        ) ?? 0
+        let maxDefaultIndex = max(0, resolvedOptions.count - 1)
+        let resolvedDefault = min(max(0, rawDefault), maxDefaultIndex)
+
+        self.id = parsedID
+        self.question = parsedQuestion
+        self.options = resolvedOptions
+        self.default = resolvedDefault
+    }
+
     func toDomain() -> SiteMakerClarifyQuestion {
         SiteMakerClarifyQuestion(
             id: id,
@@ -160,6 +267,140 @@ struct SiteMakerClarifyQuestionResponse: Decodable {
             options: options,
             defaultIndex: `default`
         )
+    }
+}
+
+private extension SiteMakerClarifyQuestionResponse {
+    struct OptionObject: Decodable {
+        let value: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case label
+            case title
+            case text
+            case value
+            case name
+        }
+
+        init(from decoder: Decoder) throws {
+            if let container = try? decoder.singleValueContainer() {
+                if let stringValue = try? container.decode(String.self) {
+                    value = stringValue
+                    return
+                }
+                if let intValue = try? container.decode(Int.self) {
+                    value = String(intValue)
+                    return
+                }
+                if let doubleValue = try? container.decode(Double.self) {
+                    value = String(doubleValue)
+                    return
+                }
+                if let boolValue = try? container.decode(Bool.self) {
+                    value = boolValue ? "true" : "false"
+                    return
+                }
+            }
+
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            value = Self.decodeLossyString(from: container)
+        }
+
+        private static func decodeLossyString(
+            from container: KeyedDecodingContainer<CodingKeys>
+        ) -> String? {
+            for key in [CodingKeys.label, .title, .text, .value, .name] {
+                if let stringValue = try? container.decodeIfPresent(String.self, forKey: key) {
+                    return stringValue
+                }
+                if let intValue = try? container.decodeIfPresent(Int.self, forKey: key) {
+                    return String(intValue)
+                }
+                if let doubleValue = try? container.decodeIfPresent(Double.self, forKey: key) {
+                    return String(doubleValue)
+                }
+                if let boolValue = try? container.decodeIfPresent(Bool.self, forKey: key) {
+                    return boolValue ? "true" : "false"
+                }
+            }
+
+            return nil
+        }
+    }
+
+    private static func decodeLossyString(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        keys: [CodingKeys]
+    ) -> String? {
+        for key in keys {
+            if let stringValue = try? container.decodeIfPresent(String.self, forKey: key) {
+                return stringValue
+            }
+            if let intValue = try? container.decodeIfPresent(Int.self, forKey: key) {
+                return String(intValue)
+            }
+            if let doubleValue = try? container.decodeIfPresent(Double.self, forKey: key) {
+                return String(doubleValue)
+            }
+            if let boolValue = try? container.decodeIfPresent(Bool.self, forKey: key) {
+                return boolValue ? "true" : "false"
+            }
+        }
+
+        return nil
+    }
+
+    private static func decodeLossyInt(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        keys: [CodingKeys]
+    ) -> Int? {
+        for key in keys {
+            if let intValue = try? container.decodeIfPresent(Int.self, forKey: key) {
+                return intValue
+            }
+            if let stringValue = try? container.decodeIfPresent(String.self, forKey: key) {
+                let trimmed = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let parsedInt = Int(trimmed) {
+                    return parsedInt
+                }
+                if let parsedDouble = Double(trimmed) {
+                    return Int(parsedDouble)
+                }
+            }
+            if let doubleValue = try? container.decodeIfPresent(Double.self, forKey: key) {
+                return Int(doubleValue)
+            }
+        }
+
+        return nil
+    }
+
+    private static func decodeLossyStringArray(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        keys: [CodingKeys]
+    ) -> [String] {
+        for key in keys {
+            if let values = try? container.decodeIfPresent([String].self, forKey: key) {
+                return values
+            }
+            if let values = try? container.decodeIfPresent([OptionObject].self, forKey: key) {
+                let flattened = values.compactMap(\.value)
+                if !flattened.isEmpty {
+                    return flattened
+                }
+            }
+            if let singleValue = try? container.decodeIfPresent(String.self, forKey: key) {
+                let pieces = singleValue
+                    .split(separator: "|")
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                if !pieces.isEmpty {
+                    return pieces
+                }
+            }
+        }
+
+        return []
     }
 }
 

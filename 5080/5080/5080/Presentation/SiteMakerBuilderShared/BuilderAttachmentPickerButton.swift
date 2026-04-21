@@ -3,6 +3,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct BuilderAttachmentPickerButton<Label: View>: View {
+    let maxAttachmentCount: Int
+    let currentAttachmentCount: Int
     let onImported: ([BuilderAttachmentDraft]) -> Void
     let onError: (String) -> Void
     let label: () -> Label
@@ -14,6 +16,10 @@ struct BuilderAttachmentPickerButton<Label: View>: View {
 
     var body: some View {
         Button {
+            guard remainingSlots > 0 else {
+                onError("You can attach up to \(maxAttachmentCount) files.")
+                return
+            }
             isSourceDialogPresented = true
         } label: {
             label()
@@ -37,7 +43,7 @@ struct BuilderAttachmentPickerButton<Label: View>: View {
         .photosPicker(
             isPresented: $isPhotoPickerPresented,
             selection: $selectedPhotoItems,
-            maxSelectionCount: 5,
+            maxSelectionCount: max(1, remainingSlots),
             matching: .any(of: [.images])
         )
         .onChange(of: selectedPhotoItems) { _, newItems in
@@ -54,6 +60,10 @@ struct BuilderAttachmentPickerButton<Label: View>: View {
 }
 
 private extension BuilderAttachmentPickerButton {
+    var remainingSlots: Int {
+        max(0, maxAttachmentCount - currentAttachmentCount)
+    }
+
     var allowedFileTypes: [UTType] {
         var result: [UTType] = [.image, .pdf]
 
@@ -65,10 +75,19 @@ private extension BuilderAttachmentPickerButton {
     }
 
     func loadPhotoItems(_ items: [PhotosPickerItem]) {
+        let slotsToUse = remainingSlots
+        guard slotsToUse > 0 else {
+            onError("You can attach up to \(maxAttachmentCount) files.")
+            selectedPhotoItems = []
+            return
+        }
+
+        let limitedItems = Array(items.prefix(slotsToUse))
+
         Task {
             var attachments: [BuilderAttachmentDraft] = []
 
-            for item in items {
+            for item in limitedItems {
                 guard let data = try? await item.loadTransferable(type: Data.self) else {
                     continue
                 }
@@ -96,6 +115,9 @@ private extension BuilderAttachmentPickerButton {
                 }
 
                 onImported(attachments)
+                if items.count > limitedItems.count {
+                    onError("Only the first \(slotsToUse) photo(s) were added.")
+                }
             }
         }
     }
@@ -103,10 +125,17 @@ private extension BuilderAttachmentPickerButton {
     func handleImportedFiles(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
+            let slotsToUse = remainingSlots
+            guard slotsToUse > 0 else {
+                onError("You can attach up to \(maxAttachmentCount) files.")
+                return
+            }
+
+            let limitedURLs = Array(urls.prefix(slotsToUse))
             Task {
                 var attachments: [BuilderAttachmentDraft] = []
 
-                for url in urls {
+                for url in limitedURLs {
                     let isSecurityScoped = url.startAccessingSecurityScopedResource()
                     defer {
                         if isSecurityScoped {
@@ -137,6 +166,9 @@ private extension BuilderAttachmentPickerButton {
                     }
 
                     onImported(attachments)
+                    if urls.count > limitedURLs.count {
+                        onError("Only the first \(slotsToUse) file(s) were added.")
+                    }
                 }
             }
 

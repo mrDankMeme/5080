@@ -21,6 +21,7 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
     @Published private(set) var detailLine = "Clarify questions will appear here."
     @Published private(set) var latestStreamText = "No stream yet."
     @Published private(set) var isBusy = false
+    @Published private(set) var isUploadingAttachments = false
     @Published private(set) var isBackNavigationLocked = false
     @Published private(set) var activeOperationKind: BuilderPendingOperationKind?
 
@@ -107,7 +108,18 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
     }
 
     func addAttachments(_ attachments: [BuilderAttachmentDraft]) {
-        pendingAttachments.append(contentsOf: attachments)
+        let remainingSlots = max(0, BuilderAttachmentDraft.maxAttachmentCount - pendingAttachments.count)
+        guard remainingSlots > 0 else {
+            presentAttachmentError("You can attach up to \(BuilderAttachmentDraft.maxAttachmentCount) files.")
+            return
+        }
+
+        let accepted = Array(attachments.prefix(remainingSlots))
+        pendingAttachments.append(contentsOf: accepted)
+
+        if accepted.count < attachments.count {
+            presentAttachmentError("Only the first \(BuilderAttachmentDraft.maxAttachmentCount) files were kept.")
+        }
     }
 
     func removePendingAttachment(id: BuilderAttachmentDraft.ID) {
@@ -550,6 +562,11 @@ private extension BuilderWorkspaceSceneViewModel {
             return text
         }
 
+        isUploadingAttachments = true
+        defer {
+            isUploadingAttachments = false
+        }
+
         let projectID = try await ensureProject(prompt: text)
 
         guard let projectSlug else {
@@ -768,7 +785,7 @@ private extension BuilderWorkspaceSceneViewModel {
             briefDescription = result.description
             suggestedTheme = result.suggestedTheme
             suggestedPalette = result.suggestedPalette
-            questions = result.questions.map { question in
+            let mappedQuestions = result.questions.map { question in
                 BuilderQuestionItem(
                     id: question.id,
                     title: question.title,
@@ -778,10 +795,13 @@ private extension BuilderWorkspaceSceneViewModel {
                     )
                 )
             }
+            questions = mappedQuestions
             statusLine = "Clarify complete."
-            detailLine = "Pick options and tap Generate."
+            detailLine = mappedQuestions.isEmpty
+                ? "Questions are taking longer than expected. Try reopening the project."
+                : "Pick options and tap Generate."
             latestStreamText = result.description
-            isBackNavigationLocked = true
+            isBackNavigationLocked = !mappedQuestions.isEmpty
 
         case .filesWritten(let count, let durationMs):
             statusLine = "Files written."

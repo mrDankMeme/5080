@@ -1,6 +1,7 @@
 import UIKit
 
 struct BuilderAttachmentDraft: Identifiable {
+    static let maxAttachmentCount = 5
     static let maxUploadBytes = 10 * 1024 * 1024
 
     let id = UUID()

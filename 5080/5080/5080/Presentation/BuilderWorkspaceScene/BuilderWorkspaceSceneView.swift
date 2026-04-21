@@ -323,6 +323,8 @@ private extension BuilderWorkspaceSceneView {
     var composerBar: some View {
         HStack(spacing: 12.scale) {
             BuilderAttachmentPickerButton(
+                maxAttachmentCount: BuilderAttachmentDraft.maxAttachmentCount,
+                currentAttachmentCount: viewModel.pendingAttachments.count,
                 onImported: { attachments in
                     viewModel.addAttachments(attachments)
                 },
@@ -468,15 +470,20 @@ private extension BuilderWorkspaceSceneView {
     }
 
     var backLockedBanner: some View {
-        HStack(alignment: .top, spacing: 10.scale) {
-            Image(systemName: viewModel.isBusy ? "sparkles" : "checkmark.seal.fill")
+        let isUploading = viewModel.isUploadingAttachments
+        let isPreparingClarify = viewModel.isBusy && viewModel.activeOperationKind == .clarify
+
+        return HStack(alignment: .top, spacing: 10.scale) {
+            Image(systemName: isUploading ? "photo.on.rectangle.angled" : (isPreparingClarify ? "sparkles" : "checkmark.seal.fill"))
                 .font(.system(size: 14.scale, weight: .semibold))
                 .foregroundStyle(Tokens.Color.base44BrandOrange)
                 .padding(.top, 1.scale)
 
             VStack(alignment: .leading, spacing: 4.scale) {
                 Text(
-                    viewModel.isBusy
+                    isUploading
+                        ? "Uploading your photos"
+                        : isPreparingClarify
                         ? "Preparing your clarifying questions"
                         : "Almost ready to start building"
                 )
@@ -484,14 +491,22 @@ private extension BuilderWorkspaceSceneView {
                 .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.84))
 
                 Text(
-                    viewModel.isBusy
+                    isUploading
+                        ? "Please wait while we upload your photos to the server."
+                        : isPreparingClarify
                         ? "Please wait a bit (usually under a minute)."
                         : "Answer the clarifying questions and tap Generate."
                 )
                 .font(Tokens.Font.regular12)
                 .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.66))
 
-                Text("Then answer the clarifying questions and tap Generate to continue building your website.")
+                Text(
+                    isUploading
+                        ? "As soon as upload finishes, your clarifying questions will appear automatically."
+                        : isPreparingClarify
+                        ? "You'll need to answer them before website generation continues."
+                        : "Website generation will continue right after you submit your answers."
+                )
                     .font(Tokens.Font.regular12)
                     .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.66))
             }

@@ -126,6 +126,8 @@ private extension Base44HomeSceneView {
 
             HStack(spacing: 12.scale) {
                 BuilderAttachmentPickerButton(
+                    maxAttachmentCount: BuilderAttachmentDraft.maxAttachmentCount,
+                    currentAttachmentCount: viewModel.attachments.count,
                     onImported: { attachments in
                         viewModel.appendAttachments(attachments)
                     },
@@ -187,8 +189,9 @@ private extension Base44HomeSceneView {
                     .foregroundStyle(Tokens.Color.inkPrimary)
 
                 if viewModel.isLoadingProjects {
-                    ProgressView()
-                        .tint(Tokens.Color.base44BrandOrange)
+                    LoaderDotsView()
+                        .scaleEffect(0.42)
+                        .frame(height: 12.scale)
                 }
             }
 
@@ -219,21 +222,37 @@ private extension Base44HomeSceneView {
 
     var emptyProjectsView: some View {
         VStack(spacing: 12.scale) {
-            Image(systemName: "sparkles")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 28.scale, height: 28.scale)
-                .foregroundStyle(Tokens.Color.base44BrandOrange)
+            if viewModel.isLoadingProjects {
+                LoaderDotsView()
+                    .scaleEffect(0.72)
+                    .frame(height: 20.scale)
 
-            Text("No Projects Yet")
-                .font(Tokens.Font.bold18)
-                .foregroundStyle(Tokens.Color.inkPrimary)
+                Text("Loading your project history")
+                    .font(Tokens.Font.bold18)
+                    .foregroundStyle(Tokens.Color.inkPrimary)
 
-            Text("Start creating your first website to see it here")
-                .font(Tokens.Font.regular16)
-                .foregroundStyle(Tokens.Color.textSecondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 260.scale)
+                Text("If you already generated websites, they will appear here in a few seconds.")
+                    .font(Tokens.Font.regular16)
+                    .foregroundStyle(Tokens.Color.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320.scale)
+            } else {
+                Image(systemName: "sparkles")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 28.scale, height: 28.scale)
+                    .foregroundStyle(Tokens.Color.base44BrandOrange)
+
+                Text("No Projects Yet")
+                    .font(Tokens.Font.bold18)
+                    .foregroundStyle(Tokens.Color.inkPrimary)
+
+                Text("Start creating your first website to see it here")
+                    .font(Tokens.Font.regular16)
+                    .foregroundStyle(Tokens.Color.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 260.scale)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 34.scale)

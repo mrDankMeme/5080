@@ -76,7 +76,12 @@ final class Base44HomeSceneViewModel: ObservableObject {
     }
 
     func appendAttachments(_ newAttachments: [BuilderAttachmentDraft]) {
-        attachments.append(contentsOf: newAttachments)
+        let remainingSlots = max(0, BuilderAttachmentDraft.maxAttachmentCount - attachments.count)
+        guard remainingSlots > 0 else {
+            return
+        }
+
+        attachments.append(contentsOf: newAttachments.prefix(remainingSlots))
     }
 
     func removeAttachment(id: BuilderAttachmentDraft.ID) {
