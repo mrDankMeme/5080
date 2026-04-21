@@ -3,6 +3,7 @@ import SwiftUI
 
 struct Base44ProjectRowView: View {
     let project: SiteMakerProjectSummary
+    let isInProgress: Bool
     let action: () -> Void
 
     var body: some View {
@@ -12,11 +13,17 @@ struct Base44ProjectRowView: View {
                     .fill(Tokens.Color.base44BrandOrange.opacity(0.12))
                     .frame(width: 52.scale, height: 52.scale)
                     .overlay {
-                        Image(systemName: project.previewURLString == nil ? "wand.and.stars" : "globe")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 18.scale, height: 18.scale)
-                            .foregroundStyle(Tokens.Color.base44BrandOrange)
+                        if isInProgress {
+                            ProgressView()
+                                .tint(Tokens.Color.base44BrandOrange)
+                                .scaleEffect(0.95)
+                        } else {
+                            Image(systemName: project.previewURLString == nil ? "wand.and.stars" : "globe")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 18.scale, height: 18.scale)
+                                .foregroundStyle(Tokens.Color.base44BrandOrange)
+                        }
                     }
 
                 VStack(alignment: .leading, spacing: 6.scale) {
@@ -25,19 +32,26 @@ struct Base44ProjectRowView: View {
                         .foregroundStyle(Tokens.Color.inkPrimary)
                         .lineLimit(2)
 
-                    Text(project.locationLabel)
+                    Text(isInProgress ? "Crafting your live website right now..." : project.locationLabel)
                         .font(Tokens.Font.regular13)
                         .foregroundStyle(Tokens.Color.textSecondary)
                         .lineLimit(1)
 
                     HStack(spacing: 8.scale) {
-                        Text(project.statusTitle)
-                            .font(Tokens.Font.semibold11)
-                            .foregroundStyle(Tokens.Color.base44BrandOrange)
-                            .padding(.horizontal, 9.scale)
-                            .frame(height: 24.scale)
-                            .background(Tokens.Color.base44BrandOrange.opacity(0.12))
-                            .clipShape(Capsule())
+                        HStack(spacing: 4.scale) {
+                            if isInProgress {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 10.scale, weight: .semibold))
+                            }
+
+                            Text(isInProgress ? "In Progress" : project.statusTitle)
+                                .font(Tokens.Font.semibold11)
+                        }
+                        .foregroundStyle(Tokens.Color.base44BrandOrange)
+                        .padding(.horizontal, 9.scale)
+                        .frame(height: 24.scale)
+                        .background(Tokens.Color.base44BrandOrange.opacity(0.12))
+                        .clipShape(Capsule())
 
                         Text(project.updatedAtLabel)
                             .font(Tokens.Font.regular13)

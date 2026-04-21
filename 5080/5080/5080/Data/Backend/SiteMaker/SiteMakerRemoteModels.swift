@@ -167,6 +167,41 @@ struct SiteMakerBuildCompleteResponse: Decodable {
     let preview_url: String
     let build: SiteMakerBuildResultResponse
 
+    private enum CodingKeys: String, CodingKey {
+        case preview_url
+        case previewUrl
+        case build
+        case success
+        case output_path
+        case outputPath
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let snakeCasePreviewURL = try container.decodeIfPresent(String.self, forKey: .preview_url)
+        let camelCasePreviewURL = try container.decodeIfPresent(String.self, forKey: .previewUrl)
+
+        self.preview_url = snakeCasePreviewURL ?? camelCasePreviewURL ?? ""
+
+        if let nestedBuild = try container.decodeIfPresent(
+            SiteMakerBuildResultResponse.self,
+            forKey: .build
+        ) {
+            self.build = nestedBuild
+            return
+        }
+
+        let success = try container.decodeIfPresent(Bool.self, forKey: .success) ?? true
+        let snakeCaseOutputPath = try container.decodeIfPresent(String.self, forKey: .output_path)
+        let camelCaseOutputPath = try container.decodeIfPresent(String.self, forKey: .outputPath)
+        let outputPath = snakeCaseOutputPath ?? camelCaseOutputPath ?? ""
+
+        self.build = SiteMakerBuildResultResponse(
+            success: success,
+            output_path: outputPath
+        )
+    }
+
     func toDomain() -> SiteMakerBuildOutcome {
         SiteMakerBuildOutcome(
             previewURLString: preview_url,
@@ -179,6 +214,25 @@ struct SiteMakerBuildCompleteResponse: Decodable {
 struct SiteMakerBuildResultResponse: Decodable {
     let success: Bool
     let output_path: String
+
+    init(success: Bool, output_path: String) {
+        self.success = success
+        self.output_path = output_path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case success
+        case output_path
+        case outputPath
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.success = try container.decodeIfPresent(Bool.self, forKey: .success) ?? true
+        let snakeCaseOutputPath = try container.decodeIfPresent(String.self, forKey: .output_path)
+        let camelCaseOutputPath = try container.decodeIfPresent(String.self, forKey: .outputPath)
+        self.output_path = snakeCaseOutputPath ?? camelCaseOutputPath ?? ""
+    }
 }
 
 struct SiteMakerFilesWrittenResponse: Decodable {

@@ -199,6 +199,7 @@ final class SiteMakerRemoteService: SiteMakerRemoteServicing {
             accessToken: accessToken,
             path: "/api/projects/\(projectID)/clarify",
             body: try encode(SiteMakerPromptRequest(prompt: prompt)),
+            expectedCompletionEventNames: ["clarify_complete", "clarify_completed"],
             onEvent: onEvent
         )
     }
@@ -215,6 +216,7 @@ final class SiteMakerRemoteService: SiteMakerRemoteServicing {
             accessToken: accessToken,
             path: "/api/projects/\(projectID)/generate",
             body: try encode(SiteMakerPromptRequest(prompt: prompt)),
+            expectedCompletionEventNames: ["build_complete", "build_completed"],
             onEvent: onEvent
         )
     }
@@ -231,6 +233,7 @@ final class SiteMakerRemoteService: SiteMakerRemoteServicing {
             accessToken: accessToken,
             path: "/api/projects/\(projectID)/edit",
             body: try encode(SiteMakerEditRequest(instruction: instruction)),
+            expectedCompletionEventNames: ["build_complete", "build_completed"],
             onEvent: onEvent
         )
     }
@@ -244,6 +247,7 @@ private extension SiteMakerRemoteService {
         accessToken: String,
         path: String,
         body: Data,
+        expectedCompletionEventNames: Set<String>,
         onEvent: @escaping @MainActor (SiteMakerStreamEvent) -> Void
     ) async throws {
         let url = try makeURL(baseURLString: baseURLString, path: path, queryItems: [])
@@ -273,6 +277,11 @@ private extension SiteMakerRemoteService {
         }
 
         var currentEventName = ""
+        let normalizedCompletionEventNames = Set(
+            expectedCompletionEventNames.map(normalizedEventName(from:))
+        )
+        var didReceiveExpectedCompletion = false
+        var didReceiveAnyDataEvent = false
 
         do {
             for try await line in bytes.lines {
@@ -283,8 +292,14 @@ private extension SiteMakerRemoteService {
 
                 if line.hasPrefix("data: ") {
                     let rawValue = String(line.dropFirst(6))
+                    didReceiveAnyDataEvent = true
+                    let normalizedEvent = normalizedEventName(from: currentEventName)
 
-                    if currentEventName == "error" {
+                    if normalizedCompletionEventNames.contains(normalizedEvent) {
+                        didReceiveExpectedCompletion = true
+                    }
+
+                    if normalizedEvent == "error" {
                         throw SiteMakerBuilderError.stream(
                             message: decodeStreamError(from: rawValue)
                         )
@@ -297,6 +312,18 @@ private extension SiteMakerRemoteService {
                         onEvent(event)
                     }
                 }
+            }
+
+            if !didReceiveAnyDataEvent {
+                throw SiteMakerBuilderError.stream(
+                    message: "The generation stream returned no events."
+                )
+            }
+
+            if !didReceiveExpectedCompletion {
+                throw SiteMakerBuilderError.stream(
+                    message: "The generation stream ended before a completion event arrived."
+                )
             }
         } catch let error as SiteMakerBuilderError {
             throw error
@@ -311,12 +338,12 @@ private extension SiteMakerRemoteService {
     ) -> SiteMakerStreamEvent? {
         let renderedValue = decodeString(from: rawValue) ?? rawValue
 
-        switch name {
+        switch normalizedEventName(from: name) {
         case "clarify_start":
             return .stageStarted(stage: .clarify, message: renderedValue)
         case "clarify_token":
             return .token(stage: .clarify, message: renderedValue)
-        case "clarify_complete":
+        case "clarify_complete", "clarify_completed":
             if let result = decode(SiteMakerClarifyResponse.self, from: rawValue) {
                 return .clarifyCompleted(result.toDomain())
             }
@@ -347,7 +374,7 @@ private extension SiteMakerRemoteService {
                 return .filesWritten(count: count, durationMs: payload.duration_ms)
             }
             return .message(name: name, value: renderedValue)
-        case "build_complete":
+        case "build_complete", "build_completed":
             if let payload = decode(SiteMakerBuildCompleteResponse.self, from: rawValue) {
                 return .buildCompleted(payload.toDomain())
             }
@@ -527,6 +554,12 @@ private extension SiteMakerRemoteService {
         }
 
         return String(normalized.prefix(48))
+    }
+
+    func normalizedEventName(from name: String) -> String {
+        name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
     }
 }
 

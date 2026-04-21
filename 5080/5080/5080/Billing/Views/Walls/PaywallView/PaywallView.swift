@@ -181,7 +181,7 @@ struct PaywallView: View {
         let safeBottom = geo.safeAreaInsets.bottom
         let cardHeight = paywallCardHeight(for: geo, safeBottom: safeBottom)
         PaywallBottomCardView(
-            titleText: "Create Apps & Websites Just by Chatting with AI",
+            titleText: "Create Live Websites Just by Chatting with AI",
             cancelText: "Cancel Anytime",
             continueText: "Continue",
             footerTerms: "Terms of Use",

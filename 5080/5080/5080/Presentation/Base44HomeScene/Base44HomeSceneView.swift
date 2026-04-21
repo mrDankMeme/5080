@@ -86,7 +86,7 @@ private extension Base44HomeSceneView {
     }
 
     var titleView: some View {
-        Text("Turn Ideas into Apps & Websites")
+        Text("Turn Ideas into Live Websites")
             .font(Tokens.Font.bold24)
             .foregroundStyle(Tokens.Color.inkPrimary)
             .multilineTextAlignment(.leading)
@@ -197,7 +197,10 @@ private extension Base44HomeSceneView {
             } else {
                 VStack(spacing: 12.scale) {
                     ForEach(viewModel.projects) { project in
-                        Base44ProjectRowView(project: project) {
+                        Base44ProjectRowView(
+                            project: project,
+                            isInProgress: viewModel.isProjectBusy(project.id)
+                        ) {
                             onTapProject(project)
                         }
                     }
@@ -226,7 +229,7 @@ private extension Base44HomeSceneView {
                 .font(Tokens.Font.bold18)
                 .foregroundStyle(Tokens.Color.inkPrimary)
 
-            Text("Start creating your first website or app to see it here")
+            Text("Start creating your first website to see it here")
                 .font(Tokens.Font.regular16)
                 .foregroundStyle(Tokens.Color.textSecondary)
                 .multilineTextAlignment(.center)

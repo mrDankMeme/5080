@@ -20,9 +20,9 @@ enum SiteMakerBuilderError: LocalizedError {
         case .missingClarifyResult:
             return "Run clarify first, then generate the site."
         case .missingPreviewURL:
-            return "Preview URL is missing. Generate the site first."
+            return "Live site URL is missing. Generate the site first."
         case .invalidPreviewURL(let value):
-            return "Preview URL is invalid: \(value)"
+            return "Live site URL is invalid: \(value)"
         case .invalidUploadedAssetURL(let value):
             return "Uploaded asset URL is invalid: \(value)"
         case .attachmentTooLarge(let value):

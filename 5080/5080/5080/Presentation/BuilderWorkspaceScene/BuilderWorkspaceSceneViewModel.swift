@@ -21,7 +21,8 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
     @Published private(set) var detailLine = "Clarify questions will appear here."
     @Published private(set) var latestStreamText = "No stream yet."
     @Published private(set) var isBusy = false
-    @Published private(set) var isBackNavigationLocked = true
+    @Published private(set) var isBackNavigationLocked = false
+    @Published private(set) var activeOperationKind: BuilderPendingOperationKind?
 
     private let launch: BuilderSceneLaunch
     private let createProjectUseCase: CreateSiteMakerProjectUseCaseProtocol
@@ -49,6 +50,11 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
         self.clarifyProjectUseCase = clarifyProjectUseCase
         self.generateProjectUseCase = generateProjectUseCase
         self.editProjectUseCase = editProjectUseCase
+
+        if case .new = launch {
+            // Keep users on clarify flow until they can start generation explicitly.
+            isBackNavigationLocked = true
+        }
     }
 
     var hasPrompt: Bool {
@@ -57,6 +63,10 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
 
     var hasQuestions: Bool {
         !questions.isEmpty
+    }
+
+    var shouldShowClarifyQuestions: Bool {
+        hasQuestions && !isGenerationLikeOperationRunning
     }
 
     var hasPreview: Bool {
@@ -69,6 +79,11 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
 
     var canDismiss: Bool {
         !isBackNavigationLocked
+    }
+
+    var isGenerationLikeOperationRunning: Bool {
+        guard isBusy else { return false }
+        return activeOperationKind == .generate || activeOperationKind == .edit
     }
 
     var composerPlaceholder: String {
@@ -125,37 +140,32 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
     }
 
     func generateSite() async {
+        guard let projectID else {
+            handle(SiteMakerBuilderError.missingProject, fallback: "Generate failed.")
+            return
+        }
+
+        guard hasQuestions, !briefDescription.isEmpty else {
+            handle(SiteMakerBuilderError.missingClarifyResult, fallback: "Generate failed.")
+            return
+        }
+
         do {
-            guard let projectID else {
-                throw SiteMakerBuilderError.missingProject
-            }
-
-            guard hasQuestions, !briefDescription.isEmpty else {
-                throw SiteMakerBuilderError.missingClarifyResult
-            }
-
-            isBusy = true
-            isBackNavigationLocked = true
-            statusLine = "Generating site..."
-            detailLine = "Spec, code, files, and build events will stream from the backend."
-            latestStreamText = "Waiting for spec stream..."
-
             let prompt = try await prepareGeneratePrompt()
-
-            try await generateProjectUseCase.execute(
+            // Persist intent before awaiting stream start to survive quick scene transitions.
+            BuilderPendingOperationStore.upsert(
                 projectID: projectID,
-                prompt: prompt
-            ) { [weak self] event in
-                self?.handleStreamEvent(
-                    event,
-                    buildSuccessLine: "Site is live."
-                )
-            }
+                kind: .generate,
+                payload: prompt
+            )
+            await runGenerateStream(
+                projectID: projectID,
+                prompt: prompt,
+                isResuming: false
+            )
         } catch {
             handle(error, fallback: "Generate failed.")
         }
-
-        isBusy = false
     }
 
     func sharePreviewLink() {
@@ -166,7 +176,7 @@ final class BuilderWorkspaceSceneViewModel: ObservableObject {
 
             shareSheetPayload = BuilderShareSheetPayload(items: [previewURL])
         } catch {
-            handle(error, fallback: "Preview share failed.")
+            handle(error, fallback: "Live site share failed.")
         }
     }
 
@@ -185,6 +195,9 @@ private extension BuilderWorkspaceSceneViewModel {
         do {
             let project = try await fetchProjectUseCase.execute(id: projectID)
             applyLoadedProject(project)
+            if await resumePendingOperationIfNeeded(for: project) {
+                return
+            }
         } catch {
             handle(error, fallback: "Couldn't open the project.")
         }
@@ -205,40 +218,151 @@ private extension BuilderWorkspaceSceneViewModel {
             previewURL = nil
         }
 
+        let normalizedStatus = project.status.trimmed.lowercased()
+
         if previewURL != nil {
             statusLine = "Project loaded."
-            detailLine = project.previewURLString ?? "Preview is ready."
+            detailLine = project.previewURLString ?? "Live site is ready."
+            isBackNavigationLocked = false
+        } else if isTerminalErrorStatus(normalizedStatus) {
+            statusLine = "Generation failed."
+            detailLine = "Backend reported status \"\(project.status)\". You can retry from chat."
+            isBackNavigationLocked = false
+        } else if isInProgressStatus(normalizedStatus) {
+            statusLine = "Generation in progress."
+            detailLine = "This project is still building on the server."
             isBackNavigationLocked = false
         } else {
             statusLine = "Draft loaded."
             detailLine = "Continue in chat and generate when you're ready."
-            isBackNavigationLocked = true
+            isBackNavigationLocked = false
         }
 
         latestStreamText = project.name
+        activeOperationKind = nil
+    }
+
+    func resumePendingOperationIfNeeded(for project: SiteMakerProject) async -> Bool {
+        guard let pendingRecord = BuilderPendingOperationStore.record(projectID: project.id) else {
+            return false
+        }
+
+        let normalizedStatus = project.status.trimmed.lowercased()
+        if previewURL != nil || isTerminalErrorStatus(normalizedStatus) {
+            BuilderPendingOperationStore.remove(projectID: project.id)
+            return false
+        }
+
+        switch pendingRecord.kind {
+        case .clarify:
+            let displayPrompt = project.description?.trimmed ?? project.name
+            await runClarifyStream(
+                projectID: project.id,
+                preparedPrompt: pendingRecord.payload,
+                displayPrompt: displayPrompt,
+                isResuming: true
+            )
+        case .generate, .edit:
+            await monitorPendingBuild(
+                projectID: project.id,
+                operation: pendingRecord.kind,
+                isResuming: true,
+                initialProject: project
+            )
+        }
+
+        return true
     }
 
     func clarify(prompt: String) async {
         do {
-            isBusy = true
-            statusLine = "Preparing project..."
-            detailLine = "Creating a draft project before clarify."
-            latestStreamText = "Waiting for clarify stream..."
-            previewURL = nil
-            projectStatus = "draft"
-
             let preparedPrompt = try await preparePromptWithPendingAttachments(
                 prompt,
                 isEditInstruction: false
             )
             let projectID = try await ensureProject(prompt: prompt)
+            // Persist intent before awaiting stream start to survive quick scene transitions.
+            BuilderPendingOperationStore.upsert(
+                projectID: projectID,
+                kind: .clarify,
+                payload: preparedPrompt
+            )
 
-            promptText = prompt
-            questions = []
-            briefDescription = ""
-            suggestedTheme = ""
-            suggestedPalette = ""
+            await runClarifyStream(
+                projectID: projectID,
+                preparedPrompt: preparedPrompt,
+                displayPrompt: prompt,
+                isResuming: false
+            )
+        } catch {
+            handle(error, fallback: "Clarify failed.")
+        }
+    }
 
+    func applyEdit(instruction: String) async {
+        guard let projectID else {
+            handle(SiteMakerBuilderError.missingProject, fallback: "Edit failed.")
+            return
+        }
+
+        do {
+            let preparedInstruction = try await preparePromptWithPendingAttachments(
+                instruction,
+                isEditInstruction: true
+            )
+            // Persist intent before awaiting stream start to survive quick scene transitions.
+            BuilderPendingOperationStore.upsert(
+                projectID: projectID,
+                kind: .edit,
+                payload: preparedInstruction
+            )
+            await runEditStream(
+                projectID: projectID,
+                instruction: preparedInstruction,
+                isResuming: false
+            )
+        } catch {
+            handle(error, fallback: "Edit failed.")
+        }
+    }
+
+    func runClarifyStream(
+        projectID: String,
+        preparedPrompt: String,
+        displayPrompt: String,
+        isResuming: Bool
+    ) async {
+        isBusy = true
+        isBackNavigationLocked = true
+        activeOperationKind = .clarify
+        defer {
+            isBusy = false
+            if activeOperationKind == .clarify {
+                activeOperationKind = nil
+            }
+        }
+        statusLine = isResuming ? "Resuming draft..." : "Preparing project..."
+        detailLine = isResuming
+            ? "Restoring clarify questions for this project."
+            : "Creating a draft project before clarify."
+        latestStreamText = isResuming
+            ? "Reconnecting to clarify stream..."
+            : "Waiting for clarify stream..."
+        previewURL = nil
+        projectStatus = "draft"
+        promptText = displayPrompt.trimmed
+        questions = []
+        briefDescription = ""
+        suggestedTheme = ""
+        suggestedPalette = ""
+
+        BuilderPendingOperationStore.upsert(
+            projectID: projectID,
+            kind: .clarify,
+            payload: preparedPrompt
+        )
+
+        do {
             try await clarifyProjectUseCase.execute(
                 projectID: projectID,
                 prompt: preparedPrompt
@@ -248,43 +372,122 @@ private extension BuilderWorkspaceSceneViewModel {
                     buildSuccessLine: "Site is live."
                 )
             }
+        } catch is CancellationError {
+            // Keep pending record for automatic resume after reopening the project.
         } catch {
+            BuilderPendingOperationStore.remove(projectID: projectID)
             handle(error, fallback: "Clarify failed.")
         }
-
-        isBusy = false
     }
 
-    func applyEdit(instruction: String) async {
-        do {
-            guard let projectID else {
-                throw SiteMakerBuilderError.missingProject
+    func runGenerateStream(
+        projectID: String,
+        prompt: String,
+        isResuming: Bool
+    ) async {
+        isBusy = true
+        isBackNavigationLocked = false
+        activeOperationKind = .generate
+        defer {
+            isBusy = false
+            isBackNavigationLocked = false
+            if activeOperationKind == .generate {
+                activeOperationKind = nil
             }
+        }
+        projectStatus = "building"
+        statusLine = isResuming ? "Resuming generation..." : "Generating site..."
+        detailLine = "Spec, code, files, and build events will stream from the backend. You can leave this screen and resume from Home anytime."
+        latestStreamText = isResuming
+            ? "Reconnecting to build stream..."
+            : "Waiting for spec stream..."
 
-            isBusy = true
-            statusLine = "Applying edit..."
-            detailLine = "Editing the generated site and rebuilding preview."
-            latestStreamText = instruction
+        BuilderPendingOperationStore.upsert(
+            projectID: projectID,
+            kind: .generate,
+            payload: prompt
+        )
 
-            let preparedInstruction = try await preparePromptWithPendingAttachments(
-                instruction,
-                isEditInstruction: true
-            )
-
-            try await editProjectUseCase.execute(
+        do {
+            try await generateProjectUseCase.execute(
                 projectID: projectID,
-                instruction: preparedInstruction
+                prompt: prompt
             ) { [weak self] event in
                 self?.handleStreamEvent(
                     event,
-                    buildSuccessLine: "Preview updated."
+                    buildSuccessLine: "Site is live."
                 )
             }
+        } catch is CancellationError {
+            // Keep pending record for automatic resume after reopening the project.
         } catch {
-            handle(error, fallback: "Edit failed.")
+            if shouldKeepPendingRecord(for: error, operation: .generate) {
+                await monitorPendingBuild(
+                    projectID: projectID,
+                    operation: .generate,
+                    isResuming: true,
+                    initialProject: nil
+                )
+            } else {
+                BuilderPendingOperationStore.remove(projectID: projectID)
+                handle(error, fallback: "Generate failed.")
+            }
         }
+    }
 
-        isBusy = false
+    func runEditStream(
+        projectID: String,
+        instruction: String,
+        isResuming: Bool
+    ) async {
+        isBusy = true
+        isBackNavigationLocked = false
+        activeOperationKind = .edit
+        defer {
+            isBusy = false
+            isBackNavigationLocked = false
+            if activeOperationKind == .edit {
+                activeOperationKind = nil
+            }
+        }
+        projectStatus = "building"
+        statusLine = isResuming ? "Resuming edit..." : "Applying edit..."
+        detailLine = "Editing the generated site and rebuilding the live result. You can leave this screen and resume from Home anytime."
+        latestStreamText = isResuming
+            ? "Reconnecting to build stream..."
+            : instruction
+
+        BuilderPendingOperationStore.upsert(
+            projectID: projectID,
+            kind: .edit,
+            payload: instruction
+        )
+
+        do {
+            try await editProjectUseCase.execute(
+                projectID: projectID,
+                instruction: instruction
+            ) { [weak self] event in
+                self?.handleStreamEvent(
+                    event,
+                    buildSuccessLine: "Live site updated."
+                )
+            }
+        } catch is CancellationError {
+            // Keep pending record for automatic resume after reopening the project.
+        } catch {
+            if shouldKeepPendingRecord(for: error, operation: .edit) {
+                await monitorPendingBuild(
+                    projectID: projectID,
+                    operation: .edit,
+                    isResuming: true,
+                    initialProject: nil
+                )
+            } else {
+                BuilderPendingOperationStore.remove(projectID: projectID)
+                handle(error, fallback: "Edit failed.")
+            }
+        }
     }
 
     func ensureProject(prompt: String) async throws -> String {
@@ -432,6 +635,110 @@ private extension BuilderWorkspaceSceneViewModel {
         """
     }
 
+    func monitorPendingBuild(
+        projectID: String,
+        operation: BuilderPendingOperationKind,
+        isResuming: Bool,
+        initialProject: SiteMakerProject?
+    ) async {
+        isBusy = true
+        isBackNavigationLocked = false
+        activeOperationKind = operation
+        defer {
+            isBusy = false
+            isBackNavigationLocked = false
+            if activeOperationKind == operation {
+                activeOperationKind = nil
+            }
+        }
+
+        statusLine = operation == .edit
+            ? (isResuming ? "Resuming update..." : "Update in progress...")
+            : (isResuming ? "Resuming generation..." : "Generation in progress...")
+        detailLine = "This project is already running on the server. We'll keep tracking it here."
+        latestStreamText = "Syncing project status..."
+        projectStatus = initialProject?.status ?? "building"
+
+        if let initialProject,
+           applyTerminalBuildStateIfNeeded(from: initialProject, operation: operation) {
+            return
+        }
+
+        let pollingIntervalNanoseconds: UInt64 = 4_000_000_000
+        let maxAttempts = 90
+
+        for attempt in 0..<maxAttempts {
+            if attempt > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: pollingIntervalNanoseconds)
+                } catch {
+                    return
+                }
+            }
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            do {
+                let refreshedProject = try await fetchProjectUseCase.execute(id: projectID)
+                projectStatus = refreshedProject.status
+
+                if applyTerminalBuildStateIfNeeded(from: refreshedProject, operation: operation) {
+                    return
+                }
+
+                let currentStatus = refreshedProject.status.trimmed
+                latestStreamText = currentStatus.isEmpty
+                    ? "Still building on the server..."
+                    : "status: \(currentStatus)"
+                detailLine = "This project is still building on the server."
+            } catch is CancellationError {
+                return
+            } catch {
+                latestStreamText = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+            }
+        }
+
+        statusLine = operation == .edit
+            ? "Update continues in background."
+            : "Generation continues in background."
+        detailLine = "Still running on the server. Reopen this project in a moment to continue."
+    }
+
+    @discardableResult
+    func applyTerminalBuildStateIfNeeded(
+        from project: SiteMakerProject,
+        operation: BuilderPendingOperationKind
+    ) -> Bool {
+        if let previewURLString = project.previewURLString,
+           let url = URL(string: previewURLString) {
+            previewURL = url
+            previewReloadKey = UUID()
+            projectStatus = project.status
+            statusLine = operation == .edit ? "Live site updated." : "Site is live."
+            detailLine = previewURLString
+            latestStreamText = project.name
+            isBackNavigationLocked = false
+            BuilderPendingOperationStore.remove(projectID: project.id)
+            return true
+        }
+
+        let normalizedStatus = project.status.trimmed.lowercased()
+        if isTerminalErrorStatus(normalizedStatus) {
+            projectStatus = project.status
+            statusLine = operation == .edit ? "Update failed." : "Generate failed."
+            detailLine = "Backend reported status \"\(project.status)\"."
+            latestStreamText = project.name
+            isBackNavigationLocked = false
+            BuilderPendingOperationStore.remove(projectID: project.id)
+            return true
+        }
+
+        return false
+    }
+
     func handleStreamEvent(
         _ event: SiteMakerStreamEvent,
         buildSuccessLine: String
@@ -448,6 +755,16 @@ private extension BuilderWorkspaceSceneViewModel {
             latestStreamText = message
 
         case .clarifyCompleted(let result):
+            guard activeOperationKind == .clarify else {
+                // Some generate/edit streams emit clarify payloads as intermediate telemetry.
+                // Do not switch the UI back to the question step while a build is already running.
+                latestStreamText = result.description
+                return
+            }
+
+            if let projectID {
+                BuilderPendingOperationStore.remove(projectID: projectID)
+            }
             briefDescription = result.description
             suggestedTheme = result.suggestedTheme
             suggestedPalette = result.suggestedPalette
@@ -464,6 +781,7 @@ private extension BuilderWorkspaceSceneViewModel {
             statusLine = "Clarify complete."
             detailLine = "Pick options and tap Generate."
             latestStreamText = result.description
+            isBackNavigationLocked = true
 
         case .filesWritten(let count, let durationMs):
             statusLine = "Files written."
@@ -471,10 +789,13 @@ private extension BuilderWorkspaceSceneViewModel {
             latestStreamText = durationMs.map { "duration_ms: \($0)" } ?? "Files ready."
 
         case .buildCompleted(let outcome):
+            if let projectID {
+                BuilderPendingOperationStore.remove(projectID: projectID)
+            }
             guard let url = URL(string: outcome.previewURLString) else {
                 handle(
                     SiteMakerBuilderError.invalidPreviewURL(outcome.previewURLString),
-                    fallback: "Preview update failed."
+                    fallback: "Live site update failed."
                 )
                 return
             }
@@ -501,7 +822,7 @@ private extension BuilderWorkspaceSceneViewModel {
         case .code:
             return "The backend is generating the site code."
         case .build:
-            return "The preview is being built and deployed."
+            return "The live site is being built and deployed."
         }
     }
 
@@ -510,6 +831,89 @@ private extension BuilderWorkspaceSceneViewModel {
         statusLine = fallback
         detailLine = message
         latestStreamText = message
+        isBackNavigationLocked = false
+        activeOperationKind = nil
+    }
+
+    func shouldKeepPendingRecord(
+        for error: Error,
+        operation: BuilderPendingOperationKind
+    ) -> Bool {
+        guard operation == .generate || operation == .edit else {
+            return false
+        }
+
+        if error is CancellationError {
+            return true
+        }
+
+        if let authError = error as? SiteMakerAuthorizationError {
+            switch authError {
+            case .transport, .invalidResponse:
+                return true
+            default:
+                return false
+            }
+        }
+
+        if case .stream(let message) = (error as? SiteMakerBuilderError) {
+            let normalized = message.trimmed.lowercased()
+
+            if normalized.contains("ended before a completion event arrived")
+                || normalized.contains("returned no events")
+                || normalized.contains("network")
+                || normalized.contains("connection")
+                || normalized.contains("timed out")
+                || normalized.contains("cancelled")
+                || normalized.contains("canceled") {
+                return true
+            }
+
+            return false
+        }
+
+        let fallbackMessage = ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            .trimmed
+            .lowercased()
+        return fallbackMessage.contains("network")
+            || fallbackMessage.contains("connection")
+            || fallbackMessage.contains("timed out")
+            || fallbackMessage.contains("cancelled")
+            || fallbackMessage.contains("canceled")
+    }
+
+    func isInProgressStatus(_ status: String) -> Bool {
+        switch status {
+        case "building",
+             "generating",
+             "processing",
+             "running",
+             "queued",
+             "pending",
+             "in_progress",
+             "in progress",
+             "spec",
+             "code",
+             "build",
+             "deploying":
+            return true
+        default:
+            return false
+        }
+    }
+
+    func isTerminalErrorStatus(_ status: String) -> Bool {
+        switch status {
+        case "error",
+             "failed",
+             "failure",
+             "canceled",
+             "cancelled",
+             "expired":
+            return true
+        default:
+            return false
+        }
     }
 }
 

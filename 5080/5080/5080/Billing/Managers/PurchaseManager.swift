@@ -2,7 +2,6 @@ import SwiftUI
 import Combine
 import OSLog
 import Adapty
-import StoreKit
 
 @MainActor
 final class PurchaseManager: ObservableObject {
@@ -177,11 +176,10 @@ final class PurchaseManager: ObservableObject {
             if result.success {
                 logger.info("PurchaseManager: Purchase successful for product \(product.id)")
                 if product.kind != .subscription,
-                   product.sourceProduct is StoreKit.Product,
                    let purchasedTokens = tokenAmount(from: product.id) {
                     availableGenerations = max(0, availableGenerations) + purchasedTokens
                     logger.info(
-                        "PurchaseManager: Applied local StoreKit token credit \(purchasedTokens) for product \(product.id)"
+                        "PurchaseManager: Applied local token credit \(purchasedTokens) for product \(product.id)"
                     )
                 }
                 self.purchaseState = .ready
@@ -240,6 +238,15 @@ final class PurchaseManager: ObservableObject {
     func updateServicePrices(_ pricesData: ServicePricesData?) {
         servicePricesByKey = pricesData?.pricesByKey ?? [:]
         klingModelPrices = pricesData?.klingPrice ?? []
+    }
+
+    @discardableResult
+    func resolveUnifiedUserID() -> String {
+        let resolvedUserID = AppUserIdentityConfiguration.resolvedUserID()
+        if userId != resolvedUserID {
+            userId = resolvedUserID
+        }
+        return resolvedUserID
     }
 
     func trackCurrentPaywallShown(placementID: String? = nil) {

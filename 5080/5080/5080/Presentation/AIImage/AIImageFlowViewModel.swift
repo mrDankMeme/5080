@@ -1,6 +1,5 @@
 import Foundation
 import Combine
-import Adapty
 
 @MainActor
 final class AIImageFlowViewModel: ObservableObject {
@@ -403,42 +402,7 @@ final class AIImageFlowViewModel: ObservableObject {
     }
 
     private func resolvedUserID() async -> String {
-        if let adaptyProfileId = await fetchAdaptyProfileIDWithRetry() {
-            purchaseManager.userId = adaptyProfileId
-            return adaptyProfileId
-        }
-
-        let fromBilling = purchaseManager.userId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !fromBilling.isEmpty {
-            return fromBilling
-        }
-
-        let key = "backend_shared_user_id"
-        let defaults = UserDefaults.standard
-        if let existing = defaults.string(forKey: key), !existing.isEmpty {
-            purchaseManager.userId = existing
-            return existing
-        }
-
-        let generated = UUID().uuidString
-        defaults.set(generated, forKey: key)
-        purchaseManager.userId = generated
-        return generated
-    }
-
-    private func fetchAdaptyProfileIDWithRetry() async -> String? {
-        let maxAttempts = 6
-        for attempt in 0..<maxAttempts {
-            guard !Task.isCancelled else { return nil }
-
-            if let id = await fetchAdaptyProfileID() {
-                return id
-            }
-
-            guard attempt < maxAttempts - 1 else { break }
-            try? await Task.sleep(nanoseconds: 300_000_000)
-        }
-        return nil
+        purchaseManager.resolveUnifiedUserID()
     }
 
     private func ensureAuthorized(userId: String) async {
@@ -489,16 +453,6 @@ final class AIImageFlowViewModel: ObservableObject {
         if let profile = try? await fetchProfileUseCase.execute(userId: userId) {
             sceneViewModel.syncAvailableTokens(profile.availableGenerations)
             purchaseManager.updateAvailableGenerations(profile.availableGenerations)
-        }
-    }
-
-    private func fetchAdaptyProfileID() async -> String? {
-        do {
-            let profile = try await Adapty.getProfile()
-            let id = profile.profileId.trimmingCharacters(in: .whitespacesAndNewlines)
-            return id.isEmpty ? nil : id
-        } catch {
-            return nil
         }
     }
 

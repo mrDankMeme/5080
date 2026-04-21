@@ -95,7 +95,7 @@ private extension BuilderWorkspaceSceneView {
                             .frame(width: 11.scale, height: 18.scale)
                             .foregroundStyle(
                                 Tokens.Color.inkPrimary.opacity(
-                                    viewModel.canDismiss ? 1.0 : 0.34
+                                    viewModel.canDismiss ? 0.92 : 0.34
                                 )
                             )
                     }
@@ -126,11 +126,15 @@ private extension BuilderWorkspaceSceneView {
                 VStack(alignment: .leading, spacing: 16.scale) {
                     statusCard
 
+                    if !viewModel.canDismiss {
+                        backLockedBanner
+                    }
+
                     if viewModel.hasPrompt {
                         promptBubble
                     }
 
-                    if viewModel.hasQuestions {
+                    if viewModel.shouldShowClarifyQuestions {
                         ForEach(viewModel.questions) { question in
                             questionCard(question)
                         }
@@ -157,6 +161,12 @@ private extension BuilderWorkspaceSceneView {
                 )
                 .padding(.horizontal, 24.scale)
                 .padding(.bottom, 8.scale)
+            }
+
+            if viewModel.isBusy {
+                busyBanner
+                    .padding(.horizontal, 24.scale)
+                    .padding(.bottom, 8.scale)
             }
 
             composerBar
@@ -386,17 +396,50 @@ private extension BuilderWorkspaceSceneView {
                 Tokens.Color.base44PreviewBackground
                     .overlay {
                         VStack(spacing: 12.scale) {
-                            Image(systemName: "wand.and.stars")
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 28.scale, height: 28.scale)
-                                .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.55))
+                            if viewModel.isBusy {
+                                ProgressView()
+                                    .tint(Tokens.Color.base44BrandOrange)
+                                    .scaleEffect(1.1)
 
-                            Text("Preview will appear here after Generate finishes.")
-                                .font(Tokens.Font.medium16)
-                                .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.60))
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 32.scale)
+                                Text("Generation is running on the server.")
+                                    .font(Tokens.Font.semibold16)
+                                    .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.66))
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 32.scale)
+
+                                Text("Open Chat for live details or return to Home. Reopen this project anytime to continue.")
+                                    .font(Tokens.Font.regular13)
+                                    .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.52))
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 32.scale)
+
+                                Button {
+                                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                                        selectedPane = .chat
+                                    }
+                                } label: {
+                                    Text("Open Chat")
+                                        .font(Tokens.Font.semibold15)
+                                        .foregroundStyle(Tokens.Color.surfaceWhite)
+                                        .padding(.horizontal, 18.scale)
+                                        .frame(height: 38.scale)
+                                        .background(Tokens.Color.base44BrandOrange)
+                                        .clipShape(Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                Image(systemName: "wand.and.stars")
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 28.scale, height: 28.scale)
+                                    .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.55))
+
+                                Text("Live result will appear here after Generate finishes.")
+                                    .font(Tokens.Font.medium16)
+                                    .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.60))
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 32.scale)
+                            }
 
                             Text(viewModel.statusLine)
                                 .font(Tokens.Font.regular13)
@@ -426,6 +469,78 @@ private extension BuilderWorkspaceSceneView {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    var backLockedBanner: some View {
+        HStack(alignment: .top, spacing: 10.scale) {
+            Image(systemName: viewModel.isBusy ? "sparkles" : "checkmark.seal.fill")
+                .font(.system(size: 14.scale, weight: .semibold))
+                .foregroundStyle(Tokens.Color.base44BrandOrange)
+                .padding(.top, 1.scale)
+
+            VStack(alignment: .leading, spacing: 4.scale) {
+                Text(
+                    viewModel.isBusy
+                        ? "Preparing your clarifying questions"
+                        : "Almost ready to start building"
+                )
+                .font(Tokens.Font.semibold13)
+                .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.84))
+
+                Text(
+                    viewModel.isBusy
+                        ? "Please wait a bit (usually under a minute)."
+                        : "Answer the clarifying questions and tap Generate."
+                )
+                .font(Tokens.Font.regular12)
+                .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.66))
+
+                Text("After that, you can go back while your website continues building in the background.")
+                    .font(Tokens.Font.regular12)
+                    .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.66))
+            }
+
+            Spacer(minLength: 0.scale)
+        }
+        .padding(.horizontal, 12.scale)
+        .padding(.vertical, 10.scale)
+        .background(Tokens.Color.base44SoftCard.opacity(0.92))
+        .clipShape(RoundedRectangle(cornerRadius: 12.scale, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12.scale, style: .continuous)
+                .stroke(Tokens.Color.base44Border, lineWidth: 1.scale)
+        }
+    }
+
+    var busyBanner: some View {
+        HStack(spacing: 10.scale) {
+            ProgressView()
+                .tint(Tokens.Color.base44BrandOrange)
+
+            Image(systemName: "sparkles")
+                .font(.system(size: 13.scale, weight: .semibold))
+                .foregroundStyle(Tokens.Color.base44BrandOrange.opacity(0.90))
+
+            VStack(alignment: .leading, spacing: 2.scale) {
+                Text("Crafting your live website")
+                    .font(Tokens.Font.semibold13)
+                    .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.80))
+
+                Text("You can go back now. Reopen this project anytime to continue.")
+                    .font(Tokens.Font.regular12)
+                    .foregroundStyle(Tokens.Color.inkPrimary.opacity(0.58))
+            }
+
+            Spacer(minLength: 0.scale)
+        }
+        .padding(.horizontal, 12.scale)
+        .padding(.vertical, 10.scale)
+        .background(Tokens.Color.surfaceWhite.opacity(0.88))
+        .clipShape(RoundedRectangle(cornerRadius: 12.scale, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12.scale, style: .continuous)
+                .stroke(Tokens.Color.base44Border, lineWidth: 1.scale)
+        }
     }
 
     func infoPill(title: String, value: String) -> some View {

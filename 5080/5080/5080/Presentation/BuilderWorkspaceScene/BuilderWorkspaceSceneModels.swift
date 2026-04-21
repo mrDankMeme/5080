@@ -2,7 +2,7 @@ import Foundation
 
 enum BuilderPane: String, CaseIterable, Identifiable {
     case chat = "Chat"
-    case preview = "Preview"
+    case preview = "Live"
 
     var id: String { rawValue }
 }

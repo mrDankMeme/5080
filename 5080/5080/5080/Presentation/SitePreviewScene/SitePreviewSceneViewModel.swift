@@ -37,7 +37,7 @@ final class SitePreviewSceneViewModel: ObservableObject, Identifiable {
 
     var domainText: String {
         let host = previewURL.host(percentEncoded: false)?.trimmed ?? ""
-        return host.isEmpty ? "Published preview" : host
+        return host.isEmpty ? "Published site" : host
     }
 
     var addressText: String {

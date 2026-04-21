@@ -10,6 +10,7 @@ final class Base44HomeSceneViewModel: ObservableObject {
     @Published private(set) var projectsErrorText: String?
     @Published private(set) var isSubscribed: Bool
     @Published private(set) var availableCredits: Int
+    @Published private(set) var busyProjectIDs: Set<String> = []
 
     private let fetchProjectsUseCase: FetchSiteMakerProjectsUseCaseProtocol
     private let fetchCurrentUserUseCase: FetchSiteMakerCurrentUserUseCaseProtocol
@@ -66,9 +67,11 @@ final class Base44HomeSceneViewModel: ObservableObject {
 
         do {
             projects = try await fetchProjectsUseCase.execute()
+            syncPendingProjectStates()
         } catch {
             projectsErrorText = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
+            busyProjectIDs = BuilderPendingOperationStore.activeProjectIDs()
         }
     }
 
@@ -97,6 +100,14 @@ final class Base44HomeSceneViewModel: ObservableObject {
         return launch
     }
 
+    func isProjectBusy(_ projectID: String) -> Bool {
+        if busyProjectIDs.contains(projectID) {
+            return true
+        }
+
+        return projects.first(where: { $0.id == projectID })?.isServerGenerationInProgress == true
+    }
+
     private var formattedCredits: String {
         Self.creditsFormatter.string(from: NSNumber(value: availableCredits)) ?? "\(availableCredits)"
     }
@@ -112,8 +123,7 @@ final class Base44HomeSceneViewModel: ObservableObject {
         purchaseManager.$availableGenerations
             .receive(on: DispatchQueue.main)
             .sink { [weak self] value in
-                guard let self, !self.didLoadCredits else { return }
-                self.availableCredits = max(0, value)
+                self?.availableCredits = max(0, value)
             }
             .store(in: &cancellables)
     }
@@ -124,11 +134,15 @@ final class Base44HomeSceneViewModel: ObservableObject {
 
         do {
             let currentUser = try await fetchCurrentUserUseCase.execute()
-            let resolvedCredits = max(0, currentUser.credits)
-            availableCredits = resolvedCredits
-            purchaseManager.updateAvailableGenerations(resolvedCredits)
+            let backendCredits = max(0, currentUser.credits)
+            let localCredits = max(0, purchaseManager.availableGenerations)
+            let mergedCredits = max(backendCredits, localCredits)
+            availableCredits = mergedCredits
+            purchaseManager.updateAvailableGenerations(mergedCredits)
             #if DEBUG
-            print("[5080API][Home] Header credits updated to \(availableCredits)")
+            print(
+                "[5080API][Home] Header credits updated to \(availableCredits). backend=\(backendCredits), local=\(localCredits)"
+            )
             #endif
         } catch {
             if availableCredits <= 0 {
@@ -141,6 +155,25 @@ final class Base44HomeSceneViewModel: ObservableObject {
             #endif
         }
     }
+
+    func syncPendingProjectStates() {
+        let terminalProjectIDs = projects
+            .filter(\.isServerTerminalStatus)
+            .map(\.id)
+
+        for projectID in terminalProjectIDs {
+            BuilderPendingOperationStore.remove(projectID: projectID)
+        }
+
+        let pendingProjectIDs = BuilderPendingOperationStore.activeProjectIDs()
+        let backendInProgressProjectIDs = Set(
+            projects
+                .filter(\.isServerGenerationInProgress)
+                .map(\.id)
+        )
+
+        busyProjectIDs = pendingProjectIDs.union(backendInProgressProjectIDs)
+    }
 }
 
 private extension Base44HomeSceneViewModel {
@@ -151,4 +184,117 @@ private extension Base44HomeSceneViewModel {
         formatter.maximumFractionDigits = 0
         return formatter
     }()
+}
+
+private extension SiteMakerProjectSummary {
+    var isServerGenerationInProgress: Bool {
+        switch status.trimmed.lowercased() {
+        case "building",
+             "generating",
+             "processing",
+             "running",
+             "queued",
+             "pending",
+             "in_progress",
+             "in progress",
+             "spec",
+             "code",
+             "build",
+             "deploying":
+            return true
+        default:
+            return false
+        }
+    }
+
+    var isServerTerminalStatus: Bool {
+        switch status.trimmed.lowercased() {
+        case "live",
+             "success",
+             "succeeded",
+             "completed",
+             "complete",
+             "error",
+             "failed",
+             "failure",
+             "canceled",
+             "cancelled",
+             "expired":
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+enum BuilderPendingOperationKind: String, Codable, Sendable {
+    case clarify
+    case generate
+    case edit
+}
+
+struct BuilderPendingOperationRecord: Codable, Hashable, Sendable {
+    let projectID: String
+    let kind: BuilderPendingOperationKind
+    let payload: String
+    let updatedAt: Date
+}
+
+enum BuilderPendingOperationStore {
+    private static let storageKey = "BuilderPendingOperationStore.records.v1"
+    private static let maxAge: TimeInterval = 60 * 60 * 24
+
+    static func upsert(
+        projectID: String,
+        kind: BuilderPendingOperationKind,
+        payload: String
+    ) {
+        var records = loadRecords()
+        records[projectID] = BuilderPendingOperationRecord(
+            projectID: projectID,
+            kind: kind,
+            payload: payload,
+            updatedAt: Date()
+        )
+        persist(records)
+    }
+
+    static func remove(projectID: String) {
+        var records = loadRecords()
+        records.removeValue(forKey: projectID)
+        persist(records)
+    }
+
+    static func record(projectID: String) -> BuilderPendingOperationRecord? {
+        let records = loadRecords()
+        return records[projectID]
+    }
+
+    static func activeProjectIDs() -> Set<String> {
+        let records = loadRecords()
+        return Set(records.keys)
+    }
+}
+
+private extension BuilderPendingOperationStore {
+    static func loadRecords() -> [String: BuilderPendingOperationRecord] {
+        guard
+            let data = UserDefaults.standard.data(forKey: storageKey),
+            let decoded = try? JSONDecoder().decode([String: BuilderPendingOperationRecord].self, from: data)
+        else {
+            return [:]
+        }
+
+        let now = Date()
+        return decoded.filter { _, record in
+            now.timeIntervalSince(record.updatedAt) <= maxAge
+        }
+    }
+
+    static func persist(_ records: [String: BuilderPendingOperationRecord]) {
+        guard let data = try? JSONEncoder().encode(records) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: storageKey)
+    }
 }

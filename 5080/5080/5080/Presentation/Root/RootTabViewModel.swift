@@ -118,6 +118,12 @@ final class RootTabViewModel: ObservableObject {
     }
 
     func openProject(_ project: SiteMakerProjectSummary) {
+        if homeViewModel.isProjectBusy(project.id) {
+            sitePreviewViewModel = nil
+            builderPresentation = BuilderPresentationContext(launch: .existing(project: project))
+            return
+        }
+
         if let previewViewModel = sitePreviewViewModelFactory.make(project: project) {
             builderPresentation = nil
             sitePreviewViewModel = previewViewModel

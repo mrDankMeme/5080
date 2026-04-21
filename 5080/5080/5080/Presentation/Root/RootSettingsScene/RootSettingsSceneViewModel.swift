@@ -322,7 +322,7 @@ final class RootSettingsSceneViewModel: ObservableObject {
                 .flatMap { $0.isEmpty ? nil : $0 }
             ?? "Zentium Labs"
 
-        return "I'm using \(appName) to build apps and websites with AI. \(appStoreURL.absoluteString)"
+        return "I'm using \(appName) to build live websites with AI. \(appStoreURL.absoluteString)"
     }
 
     private var premiumRowTitle: String {
